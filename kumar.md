@@ -12,3 +12,4 @@
 - app/admin/report/master-stock-report/fields.js
 - components/ReportView.jsx
 - package.json
+- scripts/seedBarcodeImagesFromFolder.mjs
