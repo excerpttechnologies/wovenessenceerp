@@ -1,13 +1,19 @@
 /* Matches a folder of photos to barcodeLabel rows by barcodeNo (file
    "4A1001.jpg" -> barcodeNo "4A1001") and stamps imageUrl with:
 
-     https://wovenessence.etpl.ai/august_8A_images/<file name>
+     /august_8A_images/<file name>
 
-   This does not upload anything - it only writes that URL string onto the
-   matching row(s), on the assumption the file of that name already exists (or
-   will exist) at that path. If it does not, the thumbnail in Master Stock
-   Report will 404 exactly like a dead link, the same failure mode
-   seedBarcodeImages.mjs guards against for the August presigned-URL set.
+   THE FILE HAS TO BE SOMEWHERE NEXT SERVES. This writes a string onto a row;
+   it does not upload, copy or publish anything. public/ is served at the site
+   root, so public/august_8A_images/8A1000.jpg answers at
+   /august_8A_images/8A1000.jpg - and a photo sitting in any other folder
+   answers nowhere. Seeding 2,487 scraped photos that were still in a
+   data-scraping folder is exactly how every one of them came back 404.
+
+   The path is ORIGIN-RELATIVE for a second reason: an absolute
+   https://wovenessence.etpl.ai/... pins the picture to the production host,
+   so the same row that works when deployed shows nothing on localhost. The
+   relative form resolves against whichever host is serving the page.
 
    Which rows get written
    ----------------------
@@ -26,9 +32,9 @@
      npm run seed:barcode-images-folder:apply -- --force  # also overwrites working photos
 
    Options
-     --dir=<name>   folder to read, relative to the project root
-                    (default "images db"). Nested paths are fine:
-                    --dir=data-scraping/images/8A
+     --dir=<name>   folder to read, relative to the project root. Defaults to
+                    the served folder itself, public/august_8A_images, which
+                    is the one folder where a match is guaranteed to resolve.
      --base=<url>   the URL prefix to stamp, if it is ever not the one above
      --force        overwrite even an imageUrl that currently displays
 */
@@ -41,8 +47,8 @@ import { imageProblem } from '@/lib/missingImages';
 const APPLY = process.argv.includes('--apply');
 const FORCE = process.argv.includes('--force');
 const arg = (n) => (process.argv.find((a) => a.startsWith(`--${n}=`)) || '').split('=')[1] || '';
-const DIR_NAME = arg('dir') || 'images db';
-const BASE_URL = arg('base') || 'https://wovenessence.etpl.ai/august_8A_images/';
+const DIR_NAME = arg('dir') || 'public/august_8A_images';
+const BASE_URL = arg('base') || '/august_8A_images/';
 
 const URI = process.env.MONGODB_URI;
 if (!URI) {

@@ -1,31 +1,44 @@
-/* Rewrites the imageUrl prefix seedBarcodeImagesFromFolder.mjs just wrote.
+/* Reconciles the imageUrl values this project stamped with what is ACTUALLY
+   served, and blanks the ones that can no longer resolve.
 
-   That script stamped:
-     http://wovenessencemobile.etpl.ai/uploads/itemsbarcodeimage/<file>
-   The correct host/path turned out to be:
-     https://wovenessence.etpl.ai/august_8A_images/<file>
+   The mistake this exists to correct
+   ----------------------------------
+   seedBarcodeImagesFromFolder.mjs stamped an ABSOLUTE url:
 
-   SCOPE: this does NOT touch every row carrying the old prefix. Rows already
-   on wovenessencemobile.etpl.ai before this project ever ran a seed script
-   (real mobile-app uploads, filed under hash names like
-   1789647562532-539541726.jpg) share that same host and would be silently
-   corrupted by a blanket prefix swap. So instead this reads the exact _id
-   list out of the backups/barcode-images-folder-before-*.json files that
-   seedBarcodeImagesFromFolder.mjs itself wrote - i.e. only rows THIS project
-   set moments ago - and rewrites only those, only if the value is still what
-   that script put there.
+     https://wovenessence.etpl.ai/august_8A_images/8A1000.jpg
+
+   Two things were wrong with that. The host only serves what is inside this
+   app's own public/ folder (wovenessence.etpl.ai IS this app deployed), and
+   the scraped photos were sitting in a folder Next does not serve - so every
+   one of them answered 404. And even once the files are in place, an absolute
+   url pins the picture to the production host: on localhost:3001 the browser
+   still goes to wovenessence.etpl.ai, which has whatever was last deployed.
+
+   The shape that works in both places is the ORIGIN-RELATIVE path this
+   project used before - public/august_8A_images/8A1000.jpg is served at
+   /august_8A_images/8A1000.jpg (lib/inventory.js:387), so the same stored
+   value resolves against localhost in development and against the real host
+   in production.
+
+   What it does
+   ------------
+     absolute url -> relative path   when the file is present in public/
+     absolute url -> ''              when it is not, because a blank reads as
+                                     "no image" on the report and puts the
+                                     unit back on the missing-images worklist,
+                                     where a broken <img> just looks broken
 
      npm run fix:barcode-image-prefix          # dry run, changes nothing
      npm run fix:barcode-image-prefix:apply    # writes, after a JSON backup
 */
 
 import mongoose from 'mongoose';
-import { readdirSync, readFileSync, writeFileSync, mkdirSync } from 'fs';
+import { readdirSync, writeFileSync, mkdirSync } from 'fs';
 import path from 'path';
 
 const APPLY = process.argv.includes('--apply');
-const OLD_PREFIX = 'http://wovenessencemobile.etpl.ai/uploads/itemsbarcodeimage/';
-const NEW_PREFIX = 'https://wovenessence.etpl.ai/august_8A_images/';
+const ABS_PREFIX = 'https://wovenessence.etpl.ai/august_8A_images/';
+const SERVED_DIR = 'august_8A_images';
 
 const URI = process.env.MONGODB_URI;
 if (!URI) {
@@ -33,63 +46,54 @@ if (!URI) {
   process.exit(1);
 }
 
-/* ---- load the exact rows our own seed script touched -------------------- */
-const backupDir = path.join(process.cwd(), 'backups');
-const backupFiles = readdirSync(backupDir).filter((f) => /^barcode-images-folder-before-.*\.json$/.test(f));
-if (!backupFiles.length) {
-  console.error('No backups/barcode-images-folder-before-*.json found - nothing to scope this fix to.');
+/* what public/ can actually answer for, keyed case-insensitively because the
+   stored file name and the file on disk need not agree on case */
+const dir = path.join(process.cwd(), 'public', SERVED_DIR);
+const served = new Map();
+try {
+  for (const f of readdirSync(dir)) served.set(f.toLowerCase(), f);
+} catch {
+  console.error('No such folder: ' + dir);
   process.exit(1);
 }
-
-const targetIds = new Map(); // id -> { willBeSetTo, sourceFile }
-for (const f of backupFiles) {
-  const entries = JSON.parse(readFileSync(path.join(backupDir, f), 'utf8'));
-  for (const e of entries) targetIds.set(String(e._id), { willBeSetTo: e.willBeSetTo, sourceFile: f });
-}
-console.log(`Backup files scanned: ${backupFiles.length}`);
-console.log(`Rows this project seeded: ${targetIds.size}`);
+console.log(`Served from public/${SERVED_DIR}: ${served.size} file(s)`);
 
 await mongoose.connect(URI);
 const rowsCol = mongoose.connection.db.collection('barcodeLabel');
 
-const { ObjectId } = mongoose.mongo;
 const rows = await rowsCol.find({
-  _id: { $in: [...targetIds.keys()].map((id) => new ObjectId(id)) },
+  imageUrl: { $regex: '^' + ABS_PREFIX.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') },
 }).toArray();
+console.log(`Rows on the absolute url: ${rows.length}`);
 
-/* Only rewrite a row if it still carries exactly what our seed script wrote -
-   if something else has touched it since (a manual edit, a re-seed), leave
-   it rather than guess. */
-const writes = [];
-const skippedChanged = [];
+const toRelative = [];
+const toBlank = [];
 for (const r of rows) {
-  const expected = targetIds.get(String(r._id))?.willBeSetTo;
-  const current = String(r.imageUrl || '');
-  if (current !== expected || !current.startsWith(OLD_PREFIX)) { skippedChanged.push(r); continue; }
-  writes.push({ r, url: NEW_PREFIX + current.slice(OLD_PREFIX.length) });
+  const file = String(r.imageUrl).slice(ABS_PREFIX.length);
+  const real = served.get(file.toLowerCase());
+  if (real) toRelative.push({ r, url: `/${SERVED_DIR}/${real}` });
+  else toBlank.push({ r, url: '' });
 }
 
-console.log(`Old prefix: ${OLD_PREFIX}`);
-console.log(`New prefix: ${NEW_PREFIX}`);
-console.log(`Rows found in DB   : ${rows.length} of ${targetIds.size} seeded ids`);
-console.log(`  to rewrite       : ${writes.length}`);
-console.log(`  skipped (changed since seeding, left alone): ${skippedChanged.length}`);
+console.log(`  -> relative path (file is served) : ${toRelative.length}`);
+console.log(`  -> blanked (file is not there)    : ${toBlank.length}`);
 
-if (skippedChanged.length) {
-  console.log('\n--- SKIPPED, imageUrl no longer matches what was seeded ---');
-  skippedChanged.slice(0, 6).forEach((r) => console.log(`  ${String(r.barcodeNo).padEnd(10)} ${String(r.imageUrl).slice(0, 70)}`));
-  if (skippedChanged.length > 6) console.log(`  ... and ${skippedChanged.length - 6} more`);
+if (toBlank.length) {
+  const names = [...new Set(toBlank.map(({ r }) => String(r.imageUrl).slice(ABS_PREFIX.length)))];
+  console.log(`\n--- ${names.length} FILE(S) NOTHING CAN SERVE, their rows go back to "no image" ---`);
+  console.log('  ' + names.slice(0, 20).join(', ') + (names.length > 20 ? ` ... +${names.length - 20}` : ''));
 }
 
+const writes = [...toRelative, ...toBlank];
 if (!writes.length) {
-  console.log('\nNothing to do.');
+  console.log('\nNothing to do - no row carries that absolute url.');
   await mongoose.disconnect();
   process.exit(0);
 }
 
 console.log('\n--- WOULD WRITE ---');
-writes.slice(0, 10).forEach(({ r, url }) => console.log(`  ${String(r.barcodeNo).padEnd(10)} -> ${url}`));
-if (writes.length > 10) console.log(`  ... ${writes.length - 10} more`);
+toRelative.slice(0, 8).forEach(({ r, url }) => console.log(`  ${String(r.barcodeNo).padEnd(10)} -> ${url}`));
+if (toRelative.length > 8) console.log(`  ... ${toRelative.length - 8} more relative-path rows`);
 
 if (!APPLY) {
   console.log(`\nDRY RUN - ${writes.length} row(s) would be rewritten.`);
@@ -98,9 +102,9 @@ if (!APPLY) {
   process.exit(0);
 }
 
-const dir = path.join(process.cwd(), 'backups');
-mkdirSync(dir, { recursive: true });
-const backupFile = path.join(dir, `barcode-image-prefix-before-${new Date().toISOString().replace(/[:.]/g, '-')}.json`);
+const backupDir = path.join(process.cwd(), 'backups');
+mkdirSync(backupDir, { recursive: true });
+const backupFile = path.join(backupDir, `barcode-image-prefix-before-${new Date().toISOString().replace(/[:.]/g, '-')}.json`);
 writeFileSync(backupFile, JSON.stringify(writes.map(({ r, url }) => ({
   _id: r._id, barcodeNo: r.barcodeNo, imageUrl: r.imageUrl, willBeSetTo: url,
 })), null, 2));

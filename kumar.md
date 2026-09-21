@@ -13,3 +13,5 @@
 - components/ReportView.jsx
 - package.json
 - scripts/seedBarcodeImagesFromFolder.mjs
+- scripts/fixBarcodeImageUrlPrefix.mjs
+- public/august_8A_images/ (2487 images moved here from the root 8A/ folder)

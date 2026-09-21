@@ -117,7 +117,7 @@ export const REPORT = {
      must parse them as numbers and ignore blanks. */
   filters: [
    //  { k: 'search', label: 'Search', type: 'text', placeholder: 'Barcode, item, description or HSN' },
-   //  { k: 'barcodeNo', label: 'Barcode Number', type: 'text', placeholder: 'e.g. 9A1135' },
+    { k: 'barcodeNo', label: 'Barcode Number', type: 'text', placeholder: 'e.g. 9A1135' },
     { k: 'groupName', label: 'Group Name', type: 'text', placeholder: 'Group name' },
     { k: 'itemCode', label: 'Item Name', type: 'text', placeholder: 'Item Name' },
    //  { k: 'itemName', label: 'Item Name', type: 'text', placeholder: 'Item name' },

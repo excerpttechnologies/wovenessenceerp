@@ -1207,11 +1207,11 @@ video {
 .pointer-events-none {
   pointer-events: none;
 }
-.visible {
-  visibility: visible;
-}
 .\!visible {
   visibility: visible !important;
+}
+.visible {
+  visibility: visible;
 }
 .invisible {
   visibility: hidden;
@@ -1390,11 +1390,11 @@ video {
 .top-\[28px\] {
   top: 28px;
 }
-.top-full {
-  top: 100%;
-}
 .top-\[calc\(100\%\+4px\)\] {
   top: calc(100% + 4px);
+}
+.top-full {
+  top: 100%;
 }
 .-z-10 {
   z-index: -10;
@@ -1417,6 +1417,9 @@ video {
 .z-\[25\] {
   z-index: 25;
 }
+.z-\[45\] {
+  z-index: 45;
+}
 .z-\[5\] {
   z-index: 5;
 }
@@ -1434,9 +1437,6 @@ video {
 }
 .z-\[95\] {
   z-index: 95;
-}
-.z-\[45\] {
-  z-index: 45;
 }
 .col-span-2 {
   grid-column: span 2 / span 2;
@@ -1489,6 +1489,9 @@ video {
 }
 .mb-8 {
   margin-bottom: 2rem;
+}
+.mb-\[5px\] {
+  margin-bottom: 5px;
 }
 .ml-0 {
   margin-left: 0px;
@@ -1567,9 +1570,6 @@ video {
 }
 .mt-\[6px\] {
   margin-top: 6px;
-}
-.mb-\[5px\] {
-  margin-bottom: 5px;
 }
 .block {
   display: block;
@@ -2475,6 +2475,10 @@ video {
   -moz-column-gap: 2rem;
        column-gap: 2rem;
 }
+.gap-x-\[18px\] {
+  -moz-column-gap: 18px;
+       column-gap: 18px;
+}
 .gap-x-\[22px\] {
   -moz-column-gap: 22px;
        column-gap: 22px;
@@ -2490,10 +2494,6 @@ video {
 }
 .gap-y-3\.5 {
   row-gap: 0.875rem;
-}
-.gap-x-\[18px\] {
-  -moz-column-gap: 18px;
-       column-gap: 18px;
 }
 .space-y-1 > :not([hidden]) ~ :not([hidden]) {
   --tw-space-y-reverse: 0;
@@ -2954,6 +2954,10 @@ video {
   --tw-bg-opacity: 1;
   background-color: rgb(107 114 128 / var(--tw-bg-opacity, 1));
 }
+.bg-\[\#6d28d9\] {
+  --tw-bg-opacity: 1;
+  background-color: rgb(109 40 217 / var(--tw-bg-opacity, 1));
+}
 .bg-\[\#6d7789\] {
   --tw-bg-opacity: 1;
   background-color: rgb(109 119 137 / var(--tw-bg-opacity, 1));
@@ -3385,10 +3389,6 @@ video {
 .bg-yellow-100 {
   --tw-bg-opacity: 1;
   background-color: rgb(254 249 195 / var(--tw-bg-opacity, 1));
-}
-.bg-\[\#6d28d9\] {
-  --tw-bg-opacity: 1;
-  background-color: rgb(109 40 217 / var(--tw-bg-opacity, 1));
 }
 .bg-gradient-to-b {
   background-image: linear-gradient(to bottom, var(--tw-gradient-stops));
@@ -5363,14 +5363,14 @@ select {
   .sm\:max-h-\[88vh\] {
     max-height: 88vh;
   }
+  .sm\:w-\[228px\] {
+    width: 228px;
+  }
   .sm\:w-\[400px\] {
     width: 400px;
   }
   .sm\:w-\[65\%\] {
     width: 65%;
-  }
-  .sm\:w-\[228px\] {
-    width: 228px;
   }
   .sm\:max-w-\[440px\] {
     max-width: 440px;

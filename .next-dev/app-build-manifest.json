@@ -6,85 +6,35 @@
       "static/css/app/layout.css",
       "static/chunks/app/layout.js"
     ],
-    "/page": [
-      "static/chunks/webpack.js",
-      "static/chunks/main-app.js",
-      "static/chunks/app/page.js"
-    ],
     "/api/notifications/route": [
       "static/chunks/webpack.js",
       "static/chunks/main-app.js",
       "static/chunks/app/api/notifications/route.js"
-    ],
-    "/login/page": [
-      "static/chunks/webpack.js",
-      "static/chunks/main-app.js",
-      "static/chunks/app/login/page.js"
-    ],
-    "/api/auth/[action]/route": [
-      "static/chunks/webpack.js",
-      "static/chunks/main-app.js",
-      "static/chunks/app/api/auth/[action]/route.js"
     ],
     "/admin/layout": [
       "static/chunks/webpack.js",
       "static/chunks/main-app.js",
       "static/chunks/app/admin/layout.js"
     ],
-    "/admin/page": [
+    "/admin/report/master-stock-report/page": [
       "static/chunks/webpack.js",
       "static/chunks/main-app.js",
-      "static/chunks/app/admin/page.js"
-    ],
-    "/api/dashboard/route": [
-      "static/chunks/webpack.js",
-      "static/chunks/main-app.js",
-      "static/chunks/app/api/dashboard/route.js"
+      "static/chunks/app/admin/report/master-stock-report/page.js"
     ],
     "/api/options/route": [
       "static/chunks/webpack.js",
       "static/chunks/main-app.js",
       "static/chunks/app/api/options/route.js"
     ],
-    "/admin/transaction/purchase/grt/page": [
+    "/api/auth/[action]/route": [
       "static/chunks/webpack.js",
       "static/chunks/main-app.js",
-      "static/chunks/app/admin/transaction/purchase/grt/page.js"
-    ],
-    "/api/purchase-grt/route": [
-      "static/chunks/webpack.js",
-      "static/chunks/main-app.js",
-      "static/chunks/app/api/purchase-grt/route.js"
-    ],
-    "/admin/transaction/intercompanysell/receivedeliverychallan/page": [
-      "static/chunks/webpack.js",
-      "static/chunks/main-app.js",
-      "static/chunks/app/admin/transaction/intercompanysell/receivedeliverychallan/page.js"
-    ],
-    "/api/ic-receive-delivery-challan/route": [
-      "static/chunks/webpack.js",
-      "static/chunks/main-app.js",
-      "static/chunks/app/api/ic-receive-delivery-challan/route.js"
+      "static/chunks/app/api/auth/[action]/route.js"
     ],
     "/api/reports/master-stock-report/route": [
       "static/chunks/webpack.js",
       "static/chunks/main-app.js",
       "static/chunks/app/api/reports/master-stock-report/route.js"
-    ],
-    "/admin/report/master-stock-report/page": [
-      "static/chunks/webpack.js",
-      "static/chunks/main-app.js",
-      "static/chunks/app/admin/report/master-stock-report/page.js"
-    ],
-    "/admin/transport/delivery/page": [
-      "static/chunks/webpack.js",
-      "static/chunks/main-app.js",
-      "static/chunks/app/admin/transport/delivery/page.js"
-    ],
-    "/admin/transaction/purchase/grc/page": [
-      "static/chunks/webpack.js",
-      "static/chunks/main-app.js",
-      "static/chunks/app/admin/transaction/purchase/grc/page.js"
     ]
   }
 }
