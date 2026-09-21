@@ -1,5 +1,5 @@
 'use client';
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import Icon from './Icon';
 import MultiSelect from './MultiSelect';
 import { useScope } from './ScopeContext';
@@ -50,6 +50,21 @@ function defaultValue(f) {
 
 const blankFilters = (spec) =>
   (spec.filters || []).reduce((a, f) => ({ ...a, [f.k]: defaultValue(f) }), {});
+
+/* Which filter fields start on screen: required ones (Search enforces them
+   anyway, so hiding them would just make the error message a surprise) plus
+   any that open with a real default value (e.g. a date range pre-filled to
+   "last month -> today"). Everything else stays tucked behind "Add Filter"
+   until picked, which is what keeps a 20+ filter report like Master Stock
+   Report from opening as a wall of empty boxes. */
+const initialVisible = (spec) => {
+  const blanks = blankFilters(spec);
+  return new Set(
+    (spec.filters || [])
+      .filter((f) => f.req || (Array.isArray(blanks[f.k]) ? blanks[f.k].length : blanks[f.k]))
+      .map((f) => f.k)
+  );
+};
 
 const isNumeric = (col) => col.f === 'amount' || col.f === 'count' || col.num;
 
@@ -106,6 +121,44 @@ function Filter({ f, value, onChange }) {
       value={value || ''}
       onChange={(e) => onChange(e.target.value)}
     />
+  );
+}
+
+/* The "+ Add Filter" control: a button that opens a plain list of every
+   filter not currently on screen, clicking one adds it. Closes on an outside
+   click the same way MultiSelect's own menu does. */
+function AddFilterMenu({ filters, visible, onAdd }) {
+  const [open, setOpen] = useState(false);
+  const box = useRef(null);
+
+  useEffect(() => {
+    function away(e) { if (box.current && !box.current.contains(e.target)) setOpen(false); }
+    document.addEventListener('mousedown', away);
+    return () => document.removeEventListener('mousedown', away);
+  }, []);
+
+  const hidden = filters.filter((f) => !visible.has(f.k));
+  if (!hidden.length) return null;
+
+  return (
+    <div className="relative" ref={box}>
+      <button type="button" className="btn" onClick={() => setOpen((o) => !o)}>
+        <Icon name="plus" size={14} /> Add Filter
+      </button>
+      {open && (
+        <div className="absolute left-0 top-[calc(100%+4px)] z-[45] max-h-72 w-64 overflow-auto rounded-md border border-linestrong bg-white shadow-pop">
+          {hidden.map((f) => (
+            <div
+              key={f.k}
+              className="ms-opt"
+              onClick={() => { onAdd(f.k); setOpen(false); }}
+            >
+              {f.label}
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
   );
 }
 
@@ -252,6 +305,8 @@ export default function ReportView({ spec }) {
 
   const [draft, setDraft] = useState(() => blankFilters(spec));
   const [applied, setApplied] = useState(() => blankFilters(spec));
+  /* which filter fields are on screen right now - see initialVisible() */
+  const [visible, setVisible] = useState(() => initialVisible(spec));
   const [tab, setTab] = useState(spec.tabs?.[0]?.k || '');
   const [data, setData] = useState(null);
   const [page, setPage] = useState(1);
@@ -264,6 +319,15 @@ export default function ReportView({ spec }) {
   const set = (k, v) => setDraft((d) => ({ ...d, [k]: v }));
 
   const required = (spec.filters || []).filter((f) => f.req);
+
+  function addFilter(k) { setVisible((v) => new Set(v).add(k)); }
+  /* removing a filter also blanks its value - otherwise a value typed before
+     it was hidden would still apply on the next Search with no field on
+     screen to explain why */
+  function removeFilter(k) {
+    setVisible((v) => { const n = new Set(v); n.delete(k); return n; });
+    set(k, Array.isArray(draft[k]) ? [] : '');
+  }
 
   /* tabs carry their own tiles and columns; a report without tabs uses the
      spec's own */
@@ -322,6 +386,7 @@ export default function ReportView({ spec }) {
     const blank = blankFilters(spec);
     setDraft(blank);
     setApplied(blank);
+    setVisible(initialVisible(spec));
     setError('');
     setSearched(!spec.searchOnly);
     if (spec.searchOnly) setData(null);
@@ -398,15 +463,28 @@ export default function ReportView({ spec }) {
           {error && <div className="flash flash-err">{error}</div>}
           {!business && <div className="flash flash-err">Select a business in the top bar.</div>}
 
-          <div className="grid grid-cols-1 items-end gap-x-[22px] gap-y-3.5 md:grid-cols-2 xl:grid-cols-3">
-            {(spec.filters || []).map((f) => (
-              <div key={f.k}>
-                <label className="f-label">
-                  {f.label}{f.req && <span className="f-req">*</span>}
-                </label>
+          <div className="flex flex-wrap items-end gap-x-[18px] gap-y-3.5">
+            {(spec.filters || []).filter((f) => visible.has(f.k)).map((f) => (
+              <div key={f.k} className="w-full sm:w-[228px]">
+                <div className="mb-[5px] flex items-center justify-between">
+                  <label className="block text-[13px] text-ink">
+                    {f.label}{f.req && <span className="f-req">*</span>}
+                  </label>
+                  {!f.req && (
+                    <button
+                      type="button"
+                      className="text-[#9aa6ba] hover:text-danger"
+                      title={'Remove ' + f.label}
+                      onClick={() => removeFilter(f.k)}
+                    >
+                      <Icon name="x" size={12} />
+                    </button>
+                  )}
+                </div>
                 <Filter f={f} value={draft[f.k]} onChange={(v) => set(f.k, v)} />
               </div>
             ))}
+            <AddFilterMenu filters={spec.filters || []} visible={visible} onAdd={addFilter} />
           </div>
 
           <div className="mt-4 flex items-center gap-2">

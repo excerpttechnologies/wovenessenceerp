@@ -38,6 +38,29 @@ const s = (v) => {
   return t || '';
 };
 
+/* The money and percentage columns are String paths on this schema
+   (lib/barcodeLabel.js:59-75), and the rows the warehouse workbook imported
+   went in through the raw driver holding real Numbers - the same split the
+   GST filter below documents. A range filter therefore has to compare the
+   CONVERTED value, never the stored spelling.
+   onError/onNull give null rather than 0 on purpose: a blank price is "not
+   recorded", and treating it as zero would pull every unpriced unit into a
+   "Max 500" answer. */
+const asNum = (path) => ({ $convert: { input: path, to: 'double', onError: null, onNull: null } });
+
+/* COST PRICE as every other reader of this collection computes it: finalNet
+   when it carries a figure, else purRate (lib/grcMoney.js rowRate, and the
+   totals pipeline at the foot of this file). */
+const COST_EXPR = {
+  $let: {
+    vars: {
+      fn: { $convert: { input: '$finalNet', to: 'double', onError: 0, onNull: 0 } },
+      pr: { $convert: { input: '$purRate', to: 'double', onError: 0, onNull: 0 } },
+    },
+    in: { $cond: [{ $gt: ['$$fn', 0] }, '$$fn', '$$pr'] },
+  },
+};
+
 export async function GET(req) {
   const session = await requireSession();
   if (!session) return json({ error: 'Unauthorized' }, 401);
@@ -61,6 +84,13 @@ export async function GET(req) {
   if (finYear) filter.finYear = { $in: [finYear, '', null] };
   if (locationId) filter.locationId = { $in: [String(locationId), '', null] };
 
+  /* Two filters now need an $or of their own (Search, and Group Name), and
+     six need an $expr (GST plus the five price ranges). Assigning either key
+     twice would silently drop the first one, so both are collected here and
+     merged onto the filter once, below. */
+  const ands = [];
+  const exprs = [];
+
   /* ---- filters, all server-side ---------------------------------------- */
   const search = s(sp.get('search'));
   if (search) {
@@ -79,11 +109,13 @@ export async function GET(req) {
     const supKeys = [...new Set(
       vendors.flatMap((v) => [String(v._id), s(v.contactId)]).filter(Boolean)
     )];
-    filter.$or = [
-      { barcodeNo: rx }, { itemCode: rx }, { itemName: rx },
-      { printDescription: rx }, { supplierDescription: rx }, { hsn: rx },
-      ...(supKeys.length ? [{ supplierId: { $in: supKeys } }] : []),
-    ];
+    ands.push({
+      $or: [
+        { barcodeNo: rx }, { itemCode: rx }, { itemName: rx },
+        { printDescription: rx }, { supplierDescription: rx }, { hsn: rx },
+        ...(supKeys.length ? [{ supplierId: { $in: supKeys } }] : []),
+      ],
+    });
   }
   const barcodeNo = s(sp.get('barcodeNo'));
   if (barcodeNo) filter.barcodeNo = { $regex: escapeRegex(barcodeNo), $options: 'i' };
@@ -120,12 +152,12 @@ export async function GET(req) {
   const gstRaw = s(sp.get('gst')).replace(/%/g, '').trim();
   if (gstRaw) {
     const gstNum = Number(gstRaw);
-    filter.$expr = Number.isFinite(gstNum)
+    exprs.push(Number.isFinite(gstNum)
       /* a GST that is not a number matches nothing, the same way a nonsense
          HSN does - quietly ignoring it would return the whole warehouse and
          read as though the filter had been applied */
-      ? { $eq: [{ $convert: { input: '$gst', to: 'double', onError: null, onNull: null } }, gstNum] }
-      : { $literal: false };
+      ? { $eq: [asNum('$gst'), gstNum] }
+      : { $literal: false });
   }
   const itemCode = s(sp.get('itemCode'));
   if (itemCode) filter.itemCode = { $regex: escapeRegex(itemCode), $options: 'i' };
@@ -153,6 +185,123 @@ export async function GET(req) {
     filter.createdAt = {};
     if (startDate) filter.createdAt.$gte = new Date(startDate);
     if (endDate) filter.createdAt.$lte = new Date(endDate + 'T23:59:59.999Z');
+  }
+
+  /* GROUP NAME is the ITEM's group - mapRow below reads it from the Item
+     master's subGroupId, never from barcodeLabel.groupId, which is not a
+     productGroup reference on this schema. So the groups whose name matches
+     are resolved first, then the items sitting in them, and the row is
+     matched on every key itemOf() below would have used to reach that item:
+     the real itemId reference, the itemCode, and the itemName the 2026-08
+     import left the style code in. */
+  const groupNameQ = s(sp.get('groupName'));
+  if (groupNameQ) {
+    const matchGroups = await ProductGroup.find({
+      name: { $regex: escapeRegex(groupNameQ), $options: 'i' },
+    }).select('_id').lean();
+    const groupItems = matchGroups.length
+      ? await Item.find({ subGroupId: { $in: matchGroups.map((g) => g._id) } })
+        .select('itemCode name').lean()
+      : [];
+    const itemKeys = [...new Set(
+      groupItems.flatMap((i) => [s(i.itemCode), s(i.name)]).filter(Boolean)
+    )];
+    /* a group that reaches no item matches no stock, rather than dropping
+       the filter and returning the whole warehouse */
+    ands.push({
+      $or: [
+        { itemId: { $in: groupItems.map((i) => i._id) } },
+        ...(itemKeys.length
+          ? [{ itemCode: { $in: itemKeys } }, { itemName: { $in: itemKeys } }]
+          : []),
+      ],
+    });
+  }
+
+  /* PRICE RANGES. Each pair is inclusive, and a bound left blank or typed as
+     nonsense is no bound at all - an empty box must not narrow anything.
+     The non-null guard is not decoration: in BSON order null sorts BELOW
+     every number, so a row with a blank price would satisfy "<= 500" and a
+     "Max" filter would quietly return all the unpriced stock as well. */
+  const addRange = (expr, minKey, maxKey) => {
+    const minRaw = s(sp.get(minKey)).replace(/%/g, '').trim();
+    const maxRaw = s(sp.get(maxKey)).replace(/%/g, '').trim();
+    const lo = Number(minRaw);
+    const hi = Number(maxRaw);
+    const hasLo = minRaw !== '' && Number.isFinite(lo);
+    const hasHi = maxRaw !== '' && Number.isFinite(hi);
+    if (!hasLo && !hasHi) return;
+    exprs.push({ $ne: [expr, null] });
+    if (hasLo) exprs.push({ $gte: [expr, lo] });
+    if (hasHi) exprs.push({ $lte: [expr, hi] });
+  };
+  addRange(COST_EXPR, 'costPriceMin', 'costPriceMax');
+  addRange(asNum('$retailPrice'), 'rspMin', 'rspMax');
+  addRange(asNum('$offerPrice'), 'rspOfferPriceMin', 'rspOfferPriceMax');
+  addRange(asNum('$wspPrice'), 'wspMin', 'wspMax');
+  addRange(asNum('$dpPrice'), 'ecomMin', 'ecomMax');
+
+  /* DISCOUNT % is a single figure rather than a range, matched on the number
+     the way GST is - disc2 is the column the report prints as Discount %. */
+  const discRaw = s(sp.get('discount')).replace(/%/g, '').trim();
+  if (discRaw) {
+    const discNum = Number(discRaw);
+    exprs.push(Number.isFinite(discNum)
+      ? { $eq: [asNum('$disc2'), discNum] }
+      : { $literal: false });
+  }
+
+  /* Merged once, for the reason given where `ands` and `exprs` are declared. */
+  if (ands.length) filter.$and = ands;
+  if (exprs.length) filter.$expr = exprs.length === 1 ? exprs[0] : { $and: exprs };
+
+  /* AGE (days) is not a field - it is derived, in mapRow below, from the date
+     this unit entered stock: the earliest inward StockMovement for the
+     barcode, and the row's own createdAt only when the unit predates the
+     ledger. So it cannot be a plain clause on barcodeLabel, and filtering it
+     after the page is read would page and total the wrong set.
+     Instead the bounds are turned into a DATE WINDOW over that same derived
+     date, and the ids inside it are resolved first - against the rows every
+     other filter has already narrowed this to, so the lookup runs over the
+     result and not over the whole warehouse. Because age floors to whole
+     days:
+       age >= N  ->  entered on or before  now - N days
+       age <= M  ->  entered strictly after now - (M+1) days  */
+  const ageMinRaw = s(sp.get('ageMin'));
+  const ageMaxRaw = s(sp.get('ageMax'));
+  const ageMin = Number(ageMinRaw);
+  const ageMax = Number(ageMaxRaw);
+  const hasAgeMin = ageMinRaw !== '' && Number.isFinite(ageMin);
+  const hasAgeMax = ageMaxRaw !== '' && Number.isFinite(ageMax);
+  if (hasAgeMin || hasAgeMax) {
+    const DAY_MS = 24 * 60 * 60 * 1000;
+    const now = Date.now();
+    const ageWindow = {};
+    if (hasAgeMin) ageWindow.$lte = new Date(now - ageMin * DAY_MS);
+    if (hasAgeMax) ageWindow.$gt = new Date(now - (ageMax + 1) * DAY_MS);
+
+    const inAge = await BarcodeLabel.aggregate([
+      { $match: filter },
+      {
+        $lookup: {
+          from: 'stockmovement',
+          let: { bid: '$_id' },
+          pipeline: [
+            { $match: { $expr: { $and: [{ $eq: ['$barcodeId', '$$bid'] }, { $gt: ['$qty', 0] }] } } },
+            { $sort: { at: 1 } },
+            { $limit: 1 },
+            { $project: { at: 1 } },
+          ],
+          as: 'inward',
+        },
+      },
+      /* the same fallback mapRow uses, so the rows this keeps are exactly
+         the rows whose printed Age satisfies the filter */
+      { $addFields: { enteredAt: { $ifNull: [{ $arrayElemAt: ['$inward.at', 0] }, '$createdAt'] } } },
+      { $match: { enteredAt: ageWindow } },
+      { $project: { _id: 1 } },
+    ]);
+    filter._id = { $in: inAge.map((r) => r._id) };
   }
 
   /* ---- SERVER-SIDE pagination: count, then read only this page ---------- */

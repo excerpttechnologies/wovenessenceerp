@@ -116,11 +116,11 @@ export const REPORT = {
      Numeric filters: "Min"/"Max" pairs are inclusive (>= / <=); the route
      must parse them as numbers and ignore blanks. */
   filters: [
-    { k: 'search', label: 'Search', type: 'text', placeholder: 'Barcode, item, description or HSN' },
-    { k: 'barcodeNo', label: 'Barcode Number', type: 'text', placeholder: 'e.g. 9A1135' },
+   //  { k: 'search', label: 'Search', type: 'text', placeholder: 'Barcode, item, description or HSN' },
+   //  { k: 'barcodeNo', label: 'Barcode Number', type: 'text', placeholder: 'e.g. 9A1135' },
     { k: 'groupName', label: 'Group Name', type: 'text', placeholder: 'Group name' },
-    { k: 'itemCode', label: 'Item', type: 'text', placeholder: 'Item / style code' },
-    { k: 'itemName', label: 'Item Name', type: 'text', placeholder: 'Item name' },
+    { k: 'itemCode', label: 'Item Name', type: 'text', placeholder: 'Item Name' },
+   //  { k: 'itemName', label: 'Item Name', type: 'text', placeholder: 'Item name' },
     { k: 'supplierId', label: 'Supplier', type: 'ref', ref: 'supplier', all: 'All Suppliers' },
     { k: 'hsn', label: 'HSN', type: 'text', placeholder: 'HSN code' },
     /* GST % is typed, not picked from the Tax master. That master

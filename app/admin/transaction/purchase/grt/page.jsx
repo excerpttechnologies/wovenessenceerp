@@ -1,5 +1,5 @@
 'use client';
-import ListView from '@/components/ListView';
+import ListView from '@/components/Listviewgrt';
 import { fmt } from '@/lib/format';
 
 /* Goods Return Notes - list. Columns declared here, not fetched from a registry. */

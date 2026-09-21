@@ -1,8 +1,11 @@
 {
   "/api/notifications/route": "app/api/notifications/route.js",
-  "/api/reports/master-stock-report/route": "app/api/reports/master-stock-report/route.js",
-  "/page": "app/page.js",
+  "/api/purchase-grt/route": "app/api/purchase-grt/route.js",
   "/login/page": "app/login/page.js",
   "/admin/page": "app/admin/page.js",
-  "/admin/report/master-stock-report/page": "app/admin/report/master-stock-report/page.js"
+  "/admin/transaction/intercompanysell/receivedeliverychallan/page": "app/admin/transaction/intercompanysell/receivedeliverychallan/page.js",
+  "/admin/transaction/purchase/grt/page": "app/admin/transaction/purchase/grt/page.js",
+  "/admin/report/master-stock-report/page": "app/admin/report/master-stock-report/page.js",
+  "/admin/transport/delivery/page": "app/admin/transport/delivery/page.js",
+  "/admin/transaction/purchase/grc/page": "app/admin/transaction/purchase/grc/page.js"
 }

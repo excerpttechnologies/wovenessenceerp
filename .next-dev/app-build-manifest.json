@@ -11,6 +11,11 @@
       "static/chunks/main-app.js",
       "static/chunks/app/page.js"
     ],
+    "/api/notifications/route": [
+      "static/chunks/webpack.js",
+      "static/chunks/main-app.js",
+      "static/chunks/app/api/notifications/route.js"
+    ],
     "/login/page": [
       "static/chunks/webpack.js",
       "static/chunks/main-app.js",
@@ -41,20 +46,45 @@
       "static/chunks/main-app.js",
       "static/chunks/app/api/options/route.js"
     ],
-    "/api/notifications/route": [
+    "/admin/transaction/purchase/grt/page": [
       "static/chunks/webpack.js",
       "static/chunks/main-app.js",
-      "static/chunks/app/api/notifications/route.js"
+      "static/chunks/app/admin/transaction/purchase/grt/page.js"
+    ],
+    "/api/purchase-grt/route": [
+      "static/chunks/webpack.js",
+      "static/chunks/main-app.js",
+      "static/chunks/app/api/purchase-grt/route.js"
+    ],
+    "/admin/transaction/intercompanysell/receivedeliverychallan/page": [
+      "static/chunks/webpack.js",
+      "static/chunks/main-app.js",
+      "static/chunks/app/admin/transaction/intercompanysell/receivedeliverychallan/page.js"
+    ],
+    "/api/ic-receive-delivery-challan/route": [
+      "static/chunks/webpack.js",
+      "static/chunks/main-app.js",
+      "static/chunks/app/api/ic-receive-delivery-challan/route.js"
+    ],
+    "/api/reports/master-stock-report/route": [
+      "static/chunks/webpack.js",
+      "static/chunks/main-app.js",
+      "static/chunks/app/api/reports/master-stock-report/route.js"
     ],
     "/admin/report/master-stock-report/page": [
       "static/chunks/webpack.js",
       "static/chunks/main-app.js",
       "static/chunks/app/admin/report/master-stock-report/page.js"
     ],
-    "/api/reports/master-stock-report/route": [
+    "/admin/transport/delivery/page": [
       "static/chunks/webpack.js",
       "static/chunks/main-app.js",
-      "static/chunks/app/api/reports/master-stock-report/route.js"
+      "static/chunks/app/admin/transport/delivery/page.js"
+    ],
+    "/admin/transaction/purchase/grc/page": [
+      "static/chunks/webpack.js",
+      "static/chunks/main-app.js",
+      "static/chunks/app/admin/transaction/purchase/grc/page.js"
     ]
   }
 }

@@ -78,6 +78,8 @@
     "seed:barcode-images:apply": "node --env-file=.env scripts/seedBarcodeImages.mjs --apply",
     "seed:barcode-images-folder": "node --env-file=.env scripts/seedBarcodeImagesFromFolder.mjs",
     "seed:barcode-images-folder:apply": "node --env-file=.env scripts/seedBarcodeImagesFromFolder.mjs --apply",
+    "fix:barcode-image-prefix": "node --env-file=.env scripts/fixBarcodeImageUrlPrefix.mjs",
+    "fix:barcode-image-prefix:apply": "node --env-file=.env scripts/fixBarcodeImageUrlPrefix.mjs --apply",
     "delete:suppliers": "node --env-file=.env seeddelete.js",
     "delete:suppliers:force": "node --env-file=.env seeddelete.js --force",
     "seed:suppliers": "node --env-file=.env scripts/seedSuppliersNew.mjs",
