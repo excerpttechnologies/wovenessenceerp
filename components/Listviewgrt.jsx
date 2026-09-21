@@ -55,6 +55,7 @@
 // // // //   );
 // // // // }
 
+// // // // /* the old revision continues below */
 // // // // export default function ListView({ cfg, slug }) {
 // // // //   const router = useRouter();
 // // // //   const { business, location, finYear } = useScope();
@@ -2153,6 +2154,7 @@ import ModalForm from "./ModalForm";
 import FilterPanel from "./FilterPanel";
 import AttachmentsDialog from "./AttachmentsDialog";
 import ShareDocDialog from "./ShareDocDialog";
+import GrtPrintDocument from "./GrtPrintDocument";
 import { useScope } from "./ScopeContext";
 import { fmt, toCsv, toXlsHtml, download, printTable } from "@/lib/format";
  
@@ -2234,9 +2236,27 @@ function ActionMenu({ items, open, onToggle, onGo, onAction }) {
   );
 }
  
+/* Readable names for the record's own keys, so the preview stops printing
+   'vendorGstNo:' and 'purchaseGroupId:' at the operator. The KEYS are the
+   record's; only the wording is spelt out here, and an unmapped key still
+   falls back to its own name rather than disappearing. */
+const GRT_VIEW_LABELS = {
+  oldStock: "Old Stock",
+  vendorGstNo: "Supplier GST No.",
+  grcNumber: "GRC No.",
+  vendorDocNo: "Supplier Document No.",
+  vendorDocDate: "Supplier Document Date",
+  purchaseGroupId: "Purchase Group",
+  occasion: "Occasion",
+  purchaseTermId: "Purchase Term",
+  agentId: "Agent",
+  logisticId: "Logistics",
+};
+
 export default function ListView({ cfg, slug }) {
   const router = useRouter();
   const { business, location, finYear, businessReady, locationReady } = useScope();
+  const [grtBusiness, setGrtBusiness] = useState(null);
   const [state, setState] = useState({
     rows: [],
     labels: {},
@@ -2280,6 +2300,31 @@ export default function ListView({ cfg, slug }) {
      the preview it is waiting for is actually on screen. The same staging the
      barcode print run uses (app/admin/transaction/purchase/barcode-print). */
   const [pendingPrint, setPendingPrint] = useState(null);
+
+  /* The company shown on the printed letterhead. Read from the EXISTING
+     /api/business/<id> - no print-only endpoint was added.
+
+     DELIBERATELY NOT GATED ON THE PREVIEW BEING OPEN. It was, and that lost
+     the letterhead: Share's Download/Print sets viewRow and pendingPrint in
+     the SAME handler, and the print fires two animation frames later - about
+     32ms, which no network round trip beats. The document was photographed
+     with business still null, so the first GRT shared in a session printed
+     an empty company band with no name, address or GSTIN. Fetching on mount
+     instead means it has long since settled by the time anything prints.
+
+     The guard on cfg.viewModal keeps this to the one list that prints a
+     document. If it fails the document simply prints without a letterhead,
+     which is still a usable return note; an error banner thrown over a print
+     preview would not be. */
+  useEffect(() => {
+    if (!cfg.viewModal || !business) return undefined;
+    let live = true;
+    fetch("/api/business/" + business)
+      .then((r) => (r.ok ? r.json() : null))
+      .then((d) => { if (live && d && d.doc) setGrtBusiness(d.doc); })
+      .catch(() => { /* letterhead omitted; the document still prints */ });
+    return () => { live = false; };
+  }, [cfg.viewModal, business]);
 
   /* PRINT THE PREVIEW THAT IS ON SCREEN.
      The browser's print-to-PDF is this application's existing download
@@ -2972,8 +3017,14 @@ export default function ListView({ cfg, slug }) {
               buttons themselves off the paper. */}
           <div className="print-doc preview-doc max-h-[90vh] w-full max-w-6xl overflow-auto rounded-lg bg-white shadow-xl" onMouseDown={(event) => event.stopPropagation()}>
             <div className="no-print flex items-center border-b border-line px-5 py-3"><span className="card-title">Preview {cfg.title}</span><span className="flex-1" /><button type="button" className="btn btn-primary mr-2" onClick={() => printAs(docFileName(viewRow))}>Download / Print</button><button type="button" className="btn" onClick={() => setViewRow(null)}>Close</button></div>
-            <div className="grid grid-cols-1 gap-2 border-b border-line p-5 text-sm md:grid-cols-4"><div><b>Vendor:</b> {state.labels[String(viewRow.supplierId)] || viewRow.supplierName || '-'}</div><div><b>GRT No:</b> {viewRow.grtNo || '-'}</div><div><b>GRT Date:</b> {fmt('date', viewRow.grtDate)}</div><div><b>Total Qty:</b> {viewRow.qty || 0}</div>{['oldStock', 'vendorGstNo', 'grcNumber', 'vendorDocNo', 'vendorDocDate', 'purchaseGroupId', 'occasion', 'purchaseTermId', 'agentId', 'logisticId'].map((key) => <div key={key}><b>{key}:</b> {key.endsWith('Date') ? fmt('date', viewRow[key]) : key.endsWith('Id') ? (state.labels[String(viewRow[key])] || viewRow[key] || '-') : (viewRow[key] || '-')}</div>)}</div>
+              <div className="grt-screen">
+            <div className="grid grid-cols-1 gap-2 border-b border-line p-5 text-sm md:grid-cols-4"><div><b>Vendor:</b> {state.labels[String(viewRow.supplierId)] || viewRow.supplierName || '-'}</div><div><b>GRT No:</b> {viewRow.grtNo || '-'}</div><div><b>GRT Date:</b> {fmt('date', viewRow.grtDate)}</div><div><b>Total Qty:</b> {viewRow.qty || 0}</div>{['oldStock', 'vendorGstNo', 'grcNumber', 'vendorDocNo', 'vendorDocDate', 'purchaseGroupId', 'occasion', 'purchaseTermId', 'agentId', 'logisticId'].map((key) => <div key={key}><b>{GRT_VIEW_LABELS[key] || key}:</b> {key.endsWith('Date') ? fmt('date', viewRow[key]) : key.endsWith('Id') ? (state.labels[String(viewRow[key])] || viewRow[key] || '-') : (viewRow[key] || '-')}</div>)}</div>
             <div className="overflow-x-auto p-5"><table className="dt min-w-[1450px]"><thead><tr><th>SL.No</th><th>Barcode</th><th>Item Code</th><th>Item Name</th><th>HSN</th><th>Pur Rate</th><th>Final NET</th><th>Retail Price</th><th>Qty</th><th>GST %</th><th>Before GST</th><th>IGST Amount</th><th>CGST Amount</th><th>SGST Amount</th><th>Net Amount</th></tr></thead><tbody>{(() => { const items = Array.isArray(viewRow.items) ? viewRow.items : []; const totals = { qty: 0, taxable: 0, igst: 0, cgst: 0, sgst: 0, net: 0 }; const rows = items.map((item, index) => { const qty = Number(item.qty) || 0; const finalNet = Number(item.finalNet || item.purRate) || 0; const taxable = finalNet * qty; const gstAmount = taxable * ((Number(item.gst) || 0) / 100); const amounts = { qty, taxable, igst: 0, cgst: gstAmount / 2, sgst: gstAmount / 2, net: taxable + gstAmount }; Object.keys(totals).forEach((key) => { totals[key] += amounts[key]; }); return <tr key={item._id || index}><td>{index + 1}</td><td>{/* the returned unit's OWN number (barcodeNo, "9A1165"), never the composed barcodeGenerated ("G513 * 05184 * 1 * 2") - two different things, and this column is the physical sticker's number */}{item.barcodeNo || '-'}</td><td>{item.itemCode || '-'}</td><td>{item.supplierDescription || item.itemName || item.printDescription || '-'}</td><td>{item.hsn || '-'}</td><td>{item.purRate || '-'}</td><td>{item.finalNet || '-'}</td><td>{item.retailPrice || item.offerPrice || '-'}</td><td>{qty.toFixed(2)}</td><td>{item.gst || 0}%</td><td>{taxable.toFixed(2)}</td><td>{amounts.igst.toFixed(2)}</td><td>{amounts.cgst.toFixed(2)}</td><td>{amounts.sgst.toFixed(2)}</td><td>{amounts.net.toFixed(2)}</td></tr>; }); if (!items.length) return <tr><td colSpan={15} className="dt-empty">No items selected.</td></tr>; return <>{rows}<tr className="font-semibold"><td colSpan={8}>Total</td><td>{totals.qty.toFixed(2)}</td><td>-</td><td>{totals.taxable.toFixed(2)}</td><td>{totals.igst.toFixed(2)}</td><td>{totals.cgst.toFixed(2)}</td><td>{totals.sgst.toFixed(2)}</td><td>{totals.net.toFixed(2)}</td></tr></>; })()}</tbody></table></div>
+              </div>
+              {/* the printable document - hidden on screen, revealed by
+                  @media print. Binds to the SAME row object as the preview
+                  above, so the two cannot disagree about a figure. */}
+              <GrtPrintDocument row={viewRow} business={grtBusiness} labels={state.labels} />
           </div>
         </div>
       )}

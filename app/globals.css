@@ -297,22 +297,276 @@ select {
     box-shadow: none !important;
     border-radius: 0 !important;
   }
-  /* the horizontal scroller and the 1450px table: on paper the table takes
-     the page's width and sets smaller, rather than hiding its right-hand
-     columns off the edge */
+  /* the horizontal scroller: on paper the table takes the page's own width
+     rather than hiding its right-hand columns off the edge */
   .preview-doc .overflow-x-auto { overflow: visible !important; }
-  .preview-doc table {
-    min-width: 0 !important;
-    width: 100% !important;
-    table-layout: auto;
-    font-size: 8.5px !important;
-  }
-  .preview-doc table th,
-  .preview-doc table td { padding: 2px 3px !important; word-break: break-word; }
   /* a row may not be split down the middle by a page boundary, and the
      header repeats on every page the table runs onto */
   .preview-doc table tr { break-inside: avoid; page-break-inside: avoid; }
   .preview-doc table thead { display: table-header-group; }
+}
+
+/* ==========================================================================
+   GOODS RETURN NOTE - the printable document (components/GrtPrintDocument).
+
+   TWO REPRESENTATIONS, ONE RECORD. .grt-screen is the ERP preview the
+   operator has always used and is hidden on paper; .grt-print is the
+   document and is hidden on screen. They bind to the same row object, so
+   they cannot disagree about a figure, and the screen is left alone.
+
+   ---- WHY A NUMBER CAME OUT IN TWO PIECES ------------------------------
+   The block that used to sit here ended with
+
+       .preview-doc table th,
+       .preview-doc table td { padding: 2px 3px; word-break: break-word; }
+
+   and that second declaration was the whole of the reported defect: the
+   columns were laid out by `table-layout: auto` across whatever the paper
+   allowed, which left the money columns narrower than their contents, and
+   `word-break: break-word` permits a break INSIDE a word when a column is
+   too narrow. To CSS a number is one word - so 1895 wrapped as "18" over
+   "95". Both declarations are gone, and the rules below make the break
+   illegal (nowrap on every value) AND stop the column being too narrow
+   (fixed layout over a colgroup whose shares total 100%).
+
+   ---- WIDTH BUDGET ------------------------------------------------------
+   Nine columns rather than fifteen - the tax figures moved to their own
+   summary - so each gets far more room than before. A4 portrait at 12mm
+   margins leaves 186mm. At 8pt a digit advances about 1.4mm, so a .c-amt
+   column at 11% = 20.5mm holds "123456.00" (9 characters, 12.6mm) with room
+   to spare, and Item Name's 22% = 40.9mm carries a long style description.
+
+   There is deliberately NO application footer. The brief asks that the page
+   not print a second footer beneath the browser's own, and a page cannot
+   switch the browser's off - that is the "Headers and footers" checkbox in
+   the print dialog. So the document ends at the signatures.
+
+   ---- THE A4 BUDGET, IN MILLIMETRES -------------------------------------
+   @page is A4 portrait at 8mm, so the printable box is 194mm x 281mm and the
+   sheet is sized in mm to match rather than in percentages of an unknown
+   viewport. Every column below is a real width, and they are chosen so the
+   table can never be wider than the paper:
+
+     SL NO 10 + BARCODE 20 + ITEM CODE 20 + ITEM NAME 50 + HSN 20
+     + PUR RATE 18 + FINAL RATE 18 + NET RETAIL 23 + QTY 15  =  194mm
+
+   Vertically, at 8px/1.2 the fixed furniture costs roughly: letterhead 18mm,
+   title 6, supplier band 14, document band 17, table head + total 10, tax and
+   value band 18, words 5, signatures 22 - about 110mm. That leaves ~170mm of
+   the 281, and an item row is about 3.4mm, so roughly FIFTY lines fit on the
+   first sheet before a second is needed. The largest GRT in this database has
+   three.
+
+   Nothing here scales the page with transform or zoom. A scaled page prints
+   blurred and its margins stop meaning anything; the fit comes from the
+   widths, the type sizes and the three-column detail bands instead.
+   ========================================================================== */
+/* the portal host never shows on screen; it exists only to be printed */
+#grt-print-root { display: none; }
+
+@media print {
+  /* ---- ISOLATE THE SURFACE -------------------------------------------
+     The generic rule above hides the application with `visibility`, which
+     paints nothing but KEEPS every box in the flow. That is fine for a
+     document pinned with `position: absolute; inset: 0`, and wrong for this
+     one, because the preview modal sits inside the admin shell:
+     <main class="px-5"> inside <div class="ml-sidebar">, where ml-sidebar is
+     a REAL 280px margin. A sheet laid out in there is measured against about
+     109mm of a 194mm page, so a 194mm document hung ~37mm off the right edge
+     - losing Net Retail Price and Qty from every row - and began below the
+     whole invisible list rather than at the top of sheet one.
+
+     So the document is portalled to a div at body level and everything else
+     at that level leaves the BOX TREE, exactly as the label run does with
+     #barcode-print-root. Then 194mm is measured against the page itself.
+     The class is present only while the preview is open. */
+  body.printing-grt > *:not(#grt-print-root) { display: none !important; }
+  #grt-print-root {
+    display: block !important;
+    visibility: visible !important;
+    position: static !important;
+    margin: 0 !important;
+    padding: 0 !important;
+    width: auto !important;
+    height: auto !important;
+    max-height: none !important;
+    overflow: visible !important;
+  }
+  #grt-print-root * { visibility: visible !important; }
+
+  /* the screen preview never reaches paper (its whole subtree is gone with
+     the shell above); this is belt and braces */
+  .grt-screen { display: none !important; }
+
+  /* A4 portrait, 8mm all round -> a 194mm x 281mm printable box */
+  .grt-print, .grt-print * { box-sizing: border-box; }
+  .grt-print {
+    display: block !important;
+    width: 194mm;
+    max-width: 194mm;
+    margin: 0 auto;
+    padding: 0;
+  }
+  .grt-sheet {
+    width: 194mm;
+    max-width: 194mm;
+    border: 0.5pt solid #000;
+    color: #000;
+    font-size: 8px;
+    line-height: 1.2;
+    overflow: hidden;
+  }
+
+  /* ---- bands ---------------------------------------------------------- */
+  .grt-band { border-bottom: 0.5pt solid #000; padding: 1.5mm 2mm; }
+  .grt-head { text-align: center; padding: 2mm; }
+  .grt-co { font-size: 14px; font-weight: 700; line-height: 1.2; }
+  .grt-head div { line-height: 1.2; }
+  .grt-contact { display: flex; justify-content: center; gap: 4mm; flex-wrap: wrap; }
+  .grt-title {
+    text-align: center;
+    font-size: 14px;
+    font-weight: 700;
+    letter-spacing: .1em;
+    text-transform: uppercase;
+    padding: 1mm 2mm;
+  }
+  .grt-sec {
+    font-size: 9px;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: .03em;
+    margin-bottom: 0.8mm;
+    border-bottom: 0.5pt solid #000;
+    padding-bottom: 0.4mm;
+  }
+
+  /* ---- the label/value grids ------------------------------------------
+     Three columns turn eleven stacked lines into four rows, which is most of
+     what buys the one-page fit. column-gap is generous, row-gap is not:
+     vertical space is the scarce one. */
+  .grt-grid { display: grid; column-gap: 4mm; row-gap: 0.4mm; }
+  .grt-g2 { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .grt-g3 { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+  .grt-f { display: flex; gap: 1.5mm; min-width: 0; }
+  /* min-width: 0 is what makes the basis real - a flex item's default
+     min-width is auto, so a label longer than its share would otherwise
+     floor the item at its own min-content and knock the values out of line */
+  .grt-f-l { flex: 0 0 42%; min-width: 0; overflow-wrap: break-word; }
+  .grt-f-l::after { content: ':'; }
+  .grt-f-v { flex: 1 1 auto; min-width: 0; font-weight: 600; overflow-wrap: break-word; }
+
+  /* two-column band, used by the tax + value summary */
+  .grt-two { display: grid; grid-template-columns: 1fr 1fr; padding: 0; }
+  .grt-two .grt-col { padding: 1.5mm 2mm; min-width: 0; }
+  .grt-two .grt-col-r { border-left: 0.5pt solid #000; }
+
+  /* ---- the item table -------------------------------------------------- */
+  .grt-tbl, .grt-tax {
+    table-layout: fixed !important;
+    border-collapse: collapse;
+    min-width: 0 !important;
+    border: 0;
+  }
+  /* !important because `.prn-tbl { font-size: 13px }` is declared LOWER DOWN
+     THIS FILE and is also a single class, so without it the later rule wins
+     and the sheet prints far larger than the column budget allows - and
+     since the cells are nowrap + overflow:hidden the surplus is silently
+     CLIPPED rather than wrapped. Scoped to @media print and to .grt-*, so
+     .prn-tbl still governs the GRC print, the tax invoice, the purchase
+     invoice and the challan unchanged. */
+  .grt-tbl { width: 194mm !important; font-size: 8px !important; }
+  .grt-tax { width: 100% !important; font-size: 7.5px !important; }
+  .grt-tbl th, .grt-tbl td,
+  .grt-tax th, .grt-tax td {
+    border: 0.5pt solid #000;
+    padding: 0.5mm 0.8mm !important;
+    /* NO value may break mid-way: not a rate, a quantity, a barcode, an HSN
+       or an item code. word-break: normal undoes any inherited break-word;
+       white-space: nowrap keeps one number on one line. */
+    white-space: nowrap;
+    word-break: normal !important;
+    overflow-wrap: normal !important;
+    overflow: hidden;
+  }
+  /* Item Name is the one free-text column, so it is the one that may wrap -
+     and it may break inside a word, because a style code has no spaces to
+     break at and must not be clipped */
+  .grt-tbl td.c-name, .grt-tbl th.c-name {
+    white-space: normal;
+    overflow-wrap: anywhere;
+  }
+  /* A HEADING IS A PHRASE, NOT A VALUE. The nowrap above stops a NUMBER
+     splitting; left on the header row it would clip "NET RETAIL PRICE"
+     instead - and .prn-tbl centres header text, so it would clip at BOTH
+     ends. Headings wrap onto a second line; line-height keeps that cheap. */
+  .grt-tbl thead th, .grt-tax thead th {
+    white-space: normal;
+    overflow: visible;
+    overflow-wrap: break-word;
+    line-height: 1.05;
+    vertical-align: bottom;
+  }
+  .grt-tbl thead, .grt-tax thead { display: table-header-group; }
+  .grt-tbl tr, .grt-tax tr { break-inside: avoid; page-break-inside: avoid; }
+  .grt-n { text-align: right; font-variant-numeric: tabular-nums; }
+  .grt-c { text-align: center; }
+  .grt-none { text-align: center; padding: 2mm !important; }
+  /* `tr.grt-total`, not `.grt-total`: .prn-tbl sets the `border` SHORTHAND on
+     every cell and a shorthand rewrites border-top. Both would otherwise be
+     one class plus one element, and .prn-tbl is declared later, so it would
+     win on source order and this rule would never paint. */
+  tr.grt-total td { border-top: 1pt solid #000 !important; font-weight: 700; }
+
+  /* real millimetres, summing to exactly the 194mm printable width */
+  .grt-tbl .c-sl { width: 10mm; }
+  .grt-tbl .c-bc { width: 20mm; }
+  .grt-tbl .c-ic { width: 20mm; }
+  .grt-tbl .c-nm { width: 50mm; }
+  .grt-tbl .c-hsn { width: 20mm; }
+  .grt-tbl .c-amt { width: 18mm; }
+  .grt-tbl .c-net { width: 23mm; }
+  .grt-tbl .c-qty { width: 15mm; }
+
+  /* The Tax Summary shares a half-band with the money block, so it has about
+     93mm. Eight columns with no stated widths would divide that equally
+     under fixed layout - about 11mm each - and "8366.00" needs more than
+     that at 7.5px once padding is taken off, so it would be cut, not
+     wrapped. Percentages are narrow, money columns wide. Shares total 100. */
+  .grt-tax .x-hsn { width: 15%; }
+  .grt-tax .x-tax { width: 19%; }
+  .grt-tax .x-pct { width: 10%; }
+  .grt-tax .x-amt { width: 12%; }
+
+  /* ---- money, words, signatures ---------------------------------------- */
+  .grt-money .grt-f { padding: 0.3mm 0; }
+  .grt-money .grt-f-l { flex: 0 0 55%; }
+  .grt-money .grt-f-v { text-align: right; }
+  .grt-net { border-top: 0.5pt solid #000; margin-top: 0.8mm; padding-top: 0.8mm; font-weight: 700; }
+  .grt-net .grt-f-v { font-size: 10px; }
+  .grt-words { font-size: 8px; }
+
+  /* enough room to actually sign, without the blank third of a page the
+     earlier version left */
+  .grt-sign {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    column-gap: 4mm;
+    border-bottom: 0;
+    padding-top: 4mm;
+  }
+  .grt-sign > div { text-align: center; }
+  .grt-sign > div > span {
+    display: block;
+    border-top: 0.5pt solid #000;
+    padding-top: 0.6mm;
+    margin-top: 9mm;
+    font-size: 8px;
+  }
+  .grt-for { font-size: 8px; }
+  /* a summary block, the words line and the signatures are each meaningless
+     split in half, so none of them may straddle a page boundary */
+  .grt-keep { break-inside: avoid; page-break-inside: avoid; }
 }
 
 /* ==========================================================================
