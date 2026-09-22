@@ -85,7 +85,9 @@
     "seed:suppliers": "node --env-file=.env scripts/seedSuppliersNew.mjs",
     "seed:suppliers:apply": "node --env-file=.env scripts/seedSuppliersNew.mjs --apply",
     "migrate:barcode-bill-slno": "node --env-file=.env --import ./scripts/aliasRegister.mjs scripts/repairBarcodeBillSlNo.mjs",
-    "migrate:barcode-bill-slno:apply": "node --env-file=.env --import ./scripts/aliasRegister.mjs scripts/repairBarcodeBillSlNo.mjs --apply"
+    "migrate:barcode-bill-slno:apply": "node --env-file=.env --import ./scripts/aliasRegister.mjs scripts/repairBarcodeBillSlNo.mjs --apply",
+    "ic:receive-pending": "node --env-file=.env --import ./scripts/aliasRegister.mjs scripts/receivePendingIcChallans.mjs",
+    "ic:receive-pending:apply": "node --env-file=.env --import ./scripts/aliasRegister.mjs scripts/receivePendingIcChallans.mjs --apply"
   },
   "dependencies": {
     "html5-qrcode": "^2.3.8",

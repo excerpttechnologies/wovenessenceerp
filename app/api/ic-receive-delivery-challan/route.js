@@ -4,7 +4,8 @@ import IcDeliveryChallan from '@/models/IcDeliveryChallan';
 import { requireSession } from '@/lib/session';
 import { resolveRefLabels } from '@/lib/refLabels';
 import { escapeRegex } from '@/lib/validate';
-import { restoreReturnedStock, receiveChallanStock, withdrawReceivedStock } from '@/lib/icStock';
+import { restoreReturnedStock, withdrawReceivedStock } from '@/lib/icStock';
+import { receiveChallan } from '@/lib/icReceive';
 import StockAdjustment from '@/models/StockAdjustment';
 import { nextDocNumber } from '@/lib/docnumber';
 
@@ -52,13 +53,15 @@ async function writeRegister({ businessId, locationId, finYear, type, reason, re
           the sender to expect the goods, the receiver to confirm what they
           sent back - so it matches on businessId OR toBusinessId.
 
-   POST { id, business }                    - accept a challan.
+   POST { id, business }                    - receive a challan (retry path;
+                                              receipt is automatic on send).
         { id, business, action: 'return',
           lines: [{ barcodeNo, qty }] }     - return PART of a received one.
 
-   Receiving records the ACCEPTANCE only. No stock is moved: this project has
-   no ledger posting for inter company movement yet, and inventing one here
-   would put stock in two places at once. */
+   RECEIVING MOVES STOCK - it creates barcodeLabel rows under the receiving
+   business, which is what lets that branch sell the goods. The comment that
+   used to sit here said no stock was moved; it had been wrong since
+   receiveChallanStock() was added. See lib/icReceive.js. */
 
 const json = (d, s = 200) => Response.json(d, {
   status: s,
@@ -257,51 +260,23 @@ async function handlePost(req) {
     return json({ ok: true, id, returned: logged });
   }
 
-  if (challan.receivedAt) {
+  /* ------------------------------------------------------------ RECEIVE --
+
+     Receipt is now automatic: /api/ic-delivery-challan lands the goods at the
+     destination in the same request that ships them, so nothing normally
+     reaches this branch any more. It is kept because it is the retry path for
+     a despatch whose receipt failed, and the backfill script uses the same
+     helper - removing it would leave no way to complete a stranded challan.
+
+     One definition of what receiving does lives in lib/icReceive.js so this
+     and the send path cannot drift apart. */
+  const { received, already } = await receiveChallan({ challan, user: session });
+
+  if (already) {
     return json({ error: 'Challan ' + (challan.dcNo || '') + ' is already received.' }, 409);
   }
-
-  /* Written through the RAW driver, not the Mongoose model.
-
-     Mongoose caches compiled models on `mongoose.models`, and Next's dev
-     server hot-reloads route files WITHOUT re-registering them. A process
-     that started before `receivedAt` joined the schema keeps the old model,
-     and strict mode then drops the $set silently - the request answers 200
-     while the document never changes. That is exactly what happened here:
-     challans saved afterwards still carried the removed viaBusinessId and
-     had no receivedAt key at all.
-
-     .collection bypasses the schema, so the write lands whatever the running
-     process last compiled. Reads are unaffected - strictQuery is off by
-     default in Mongoose 7+, so the receivedAt filter in GET works either way.
-
-     _id has to be cast by hand here; that casting is the model's job, and we
-     have just stepped around the model. */
-  /* Land the goods in THIS branch so they can be sold here.
-
-     New barcodeLabel rows under the receiving business - POS finds stock by
-     businessId + IN_STOCK, so without them the receiver owns the paperwork
-     and none of the goods. Rows in the existing collection; nothing new. */
-  await receiveChallanStock({ challan, user: session });
-
-  await writeRegister({
-    businessId: challan.toBusinessId,
-    locationId: challan.toLocationId,
-    finYear: challan.finYear || '',
-    type: 'RECEIPT',
-    reason: 'Inter Company Challan Received',
-    remarks: 'Auto-created from delivery challan ' + (challan.dcNo || ''),
-    items: Array.isArray(challan.items) ? challan.items : [],
-    user: session,
-  });
-
-  const res = await IcDeliveryChallan.collection.updateOne(
-    { _id: new Types.ObjectId(id), receivedAt: { $eq: null } },
-    { $set: { receivedAt: new Date(), receivedBy: session.name || session.email || '' } }
-  );
-
   /* never report success on a write that did not happen */
-  if (!res.modifiedCount) {
+  if (!received) {
     return json({ error: 'The receipt was not saved. Please try again.', code: 'NOT_PERSISTED' }, 500);
   }
 

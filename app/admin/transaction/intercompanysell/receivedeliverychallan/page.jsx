@@ -15,16 +15,21 @@ import { useScope } from '@/components/ScopeContext';
 
    Changing Business or Location in the top bar changes whose inbox this is.
 
-   Three tabs, all on this one screen:
+   There is no "To Receive" tab and no Receive button. Receipt is automatic:
+   /api/ic-delivery-challan lands the goods at the destination in the same
+   request that ships them, so a challan that has been sent is already here.
+   The queue that used to sit in front of this screen only held goods that had
+   already left the sender, belonging to nobody until somebody clicked.
 
-     To Receive  challans addressed here, not yet accepted
-     Received    accepted ones - each line can be PART-returned from here,
-                 for the damaged quantity only
-     Returns     what has come back on challans THIS branch sent, so the
-                 sender sees damaged goods without a screen of their own
+   Two tabs:
 
-   Receiving and returning record the PAPER only - no stock is moved. See the
-   note on the API route for why. */
+     Received  everything sent here - each line can be PART-returned from
+               here, for the damaged quantity only
+     Returns   what has come back on challans THIS branch sent, so the sender
+               sees damaged goods without a screen of their own
+
+   Receiving DOES move stock - it creates barcodeLabel rows under this branch,
+   which is what lets it sell the goods. See lib/icReceive.js. */
 
 const money = (v) => Number(v || 0).toFixed(2);
 const day = (v) => (v ? new Date(v).toLocaleDateString('en-GB') : '-');
@@ -39,7 +44,7 @@ export default function ReceiveDeliveryChallanPage() {
   /* the challan whose lines are open in the popup */
   const [detailRow, setDetailRow] = useState(null);
   const [busy, setBusy] = useState('');
-  const [tab, setTab] = useState('pending');
+  const [tab, setTab] = useState('received');
   /* returnQty is keyed challanId|barcodeNo so two challans carrying the same
      barcode cannot share a box */
   const [returnQty, setReturnQty] = useState({});
@@ -127,30 +132,6 @@ export default function ReceiveDeliveryChallanPage() {
     }
   }
 
-  async function receive(row) {
-    setBusy(row._id);
-    setFlash(null);
-    try {
-      const r = await fetch('/api/ic-receive-delivery-challan', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ id: row._id, business: scope.business }),
-      });
-      const d = await r.json();
-      if (!r.ok) {
-        setFlash({ type: 'err', msg: d.error || 'Could not receive this challan.' });
-        return;
-      }
-      setFlash({ type: 'ok', msg: 'Challan ' + (row.dcNo || '') + ' received.' });
-      setDetailRow(null);
-      load();
-    } catch {
-      setFlash({ type: 'err', msg: 'Could not receive this challan.' });
-    } finally {
-      setBusy('');
-    }
-  }
-
   return (
     <div className="card p-4">
       <div className="mb-3 flex items-center border-b border-line pb-2">
@@ -173,7 +154,7 @@ export default function ReceiveDeliveryChallanPage() {
       )}
 
       <div className="mb-3 flex gap-2">
-        {[['pending', 'To Receive'], ['received', 'Received'], ['returns', 'Returns']].map(([key, text]) => (
+        {[['received', 'Received'], ['returns', 'Returns']].map(([key, text]) => (
           <button
             key={key}
             type="button"
@@ -197,7 +178,7 @@ export default function ReceiveDeliveryChallanPage() {
               <th className="whitespace-nowrap text-center">Total Qty</th>
               <th className="whitespace-nowrap text-center">Total Value</th>
               <th className="whitespace-nowrap">
-                {tab === 'received' ? 'Received On' : tab === 'returns' ? 'Returned' : 'Receive'}
+                {tab === 'returns' ? 'Returned' : 'Received On'}
               </th>
               <th>Action</th>
             </tr>
@@ -213,9 +194,9 @@ export default function ReceiveDeliveryChallanPage() {
 
             {!loading && scope.business && !rows.length && (
               <tr><td colSpan={9} className="dt-empty">
-                {tab === 'received' ? 'Nothing received yet.'
-                  : tab === 'returns' ? 'No returns involving this branch.'
-                    : 'Nothing to receive.'}
+                {tab === 'returns'
+                  ? 'No returns involving this branch.'
+                  : 'Nothing received yet.'}
               </td></tr>
             )}
 
@@ -242,18 +223,7 @@ export default function ReceiveDeliveryChallanPage() {
                           (a, ev) => a + (ev.lines || []).reduce((n, l) => n + (Number(l.qty) || 0), 0), 0
                         )}
                       </span>
-                    ) : tab === 'received' ? day(row.receivedAt) : (
-                      <button
-                        type="button"
-                        className="btn btn-primary h-7 px-3 text-[12px]"
-                        disabled={busy === row._id}
-                        onClick={() => receive(row)}
-                      >
-                        {busy === row._id
-                          ? <span className="spin" />
-                          : <Icon name="check" size={12} />} Receive
-                      </button>
-                    )}
+                    ) : day(row.receivedAt)}
                   </td>
                   <td>
                     <button

@@ -8,6 +8,7 @@ import Business from '@/models/Business';
 import { reserveSequence } from '@/models/Counter';
 import { checkRoute } from '@/lib/icRouting';
 import { shipChallanStock, IcStockError } from '@/lib/icStock';
+import { receiveChallan, undoReceive } from '@/lib/icReceive';
 import { FIELDS, TOTAL_KEYS, computeTotals } from '@/app/admin/transaction/intercompanysell/deliverychallan/fields';
 
 /* /api/ic-delivery-challan - list + create. */
@@ -218,8 +219,9 @@ export async function POST(req) {
      number. If the movement fails - a line asking for more than is held, or
      another request taking the quantity first - the challan is REMOVED again
      rather than left standing for stock that never left. */
+  let shipped = [];
   try {
-    const shipped = await shipChallanStock({
+    shipped = await shipChallanStock({
       challan: created,
       lines: Array.isArray(created.items) ? created.items : [],
       user: session,
@@ -233,5 +235,36 @@ export async function POST(req) {
     if (err instanceof IcStockError) return json({ error: err.message }, err.status);
     throw err;
   }
-  return json({ ok: true, id: String(created._id), dcNo: created.dcNo });
+
+  /* Land the goods at the destination in the same request.
+
+     There is no acceptance step. A branch-to-branch despatch inside one
+     company has no decision for the receiver to make, so a challan that has
+     been sent IS received - the "To Receive" queue it used to wait in only
+     held goods that had already left the sender, belonging to nobody until
+     somebody remembered to click.
+
+     The challan passed here carries the SHIPPED lines, not the submitted
+     ones: receiveChallanStock() reads line.stockMoves to know which of the
+     sender's rows each unit came off, and only the shipped lines have it.
+
+     A failure here means the goods have left the sender and not arrived, so
+     the whole despatch is undone - receiver rows deleted, quantity put back
+     on the sender's rows, challan removed - rather than left half-landed. */
+  try {
+    await receiveChallan({
+      challan: { ...created.toObject(), items: shipped },
+      user: session,
+    });
+  } catch (err) {
+    await undoReceive({
+      challan: { ...created.toObject(), items: shipped },
+      user: session,
+    });
+    await IcDeliveryChallan.deleteOne({ _id: created._id });
+    if (err instanceof IcStockError) return json({ error: err.message }, err.status);
+    throw err;
+  }
+
+  return json({ ok: true, id: String(created._id), dcNo: created.dcNo, received: true });
 }

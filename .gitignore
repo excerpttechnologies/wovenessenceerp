@@ -1,10 +1,11 @@
 /node_modules
 .env
 .next
-.nect-dev
+.next-dev
 /uploads
 grc-import-report.json
 backups/
 supplier-import-report.json
 agent-import-report.json
 /public
+/newbarcodeIMage
