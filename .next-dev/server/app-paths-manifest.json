@@ -1,7 +1,0 @@
-{
-  "/api/notifications/route": "app/api/notifications/route.js",
-  "/api/reports/master-stock-report/route": "app/api/reports/master-stock-report/route.js",
-  "/page": "app/page.js",
-  "/admin/report/master-stock-report/page": "app/admin/report/master-stock-report/page.js",
-  "/admin/page": "app/admin/page.js"
-}
