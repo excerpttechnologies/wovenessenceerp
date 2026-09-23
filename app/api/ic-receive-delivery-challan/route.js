@@ -8,6 +8,16 @@ import { restoreReturnedStock, withdrawReceivedStock } from '@/lib/icStock';
 import { receiveChallan } from '@/lib/icReceive';
 import StockAdjustment from '@/models/StockAdjustment';
 import { nextDocNumber } from '@/lib/docnumber';
+import { screenDenial, SCREENS, ACTIONS as PERM } from '@/lib/screenPermission';
+
+/* Receiving and returning are both UPDATES to a challan somebody else raised.
+   This screen creates no document and deletes none, so the Create and Delete
+   ticks against it on Staff Management > Roles & Permissions have nothing to
+   gate - Read controls the list, Update controls both buttons. */
+const IC_RDC = {
+  screen: SCREENS.IC_RECEIVE_DELIVERY_CHALLAN,
+  label: 'incoming inter company challans',
+};
 
 /* The register entry every stock event in this app leaves behind.
 
@@ -87,6 +97,13 @@ export async function GET(req) {
   if (!business || !isValidObjectId(business)) {
     return json({ rows: [], labels: {}, total: 0, page: 1, pages: 1, perPage });
   }
+
+  /* Only refuses when this role has a saved permission matrix that withholds
+     it - see lib/screenPermission.js. */
+  const denied = await screenDenial({
+    session, ...IC_RDC, action: PERM.READ, businessId: business,
+  });
+  if (denied) return json({ error: denied.message, code: denied.code }, 403);
 
   const view = sp.get('view') === 'returns' ? 'returns' : 'incoming';
 
@@ -171,6 +188,13 @@ async function handlePost(req) {
   if (!isValidObjectId(business) || String(challan.toBusinessId) !== business) {
     return json({ error: 'This challan is not addressed to the selected branch.' }, 403);
   }
+
+  /* Covers both branches below - receiving and returning are the same
+     permission, because both act on a challan this branch did not raise. */
+  const denied = await screenDenial({
+    session, ...IC_RDC, action: PERM.UPDATE, businessId: business,
+  });
+  if (denied) return json({ error: denied.message, code: denied.code }, 403);
   /* ---------------------------------------------------------- RETURN ----
 
      Part of a received challan going back: the receiver keeps what is sound

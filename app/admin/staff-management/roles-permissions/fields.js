@@ -1,20 +1,25 @@
+import { NAV } from '@/config/nav';
+
 /* Roles & Permissions - the data behind the screen.
 
-   A PLAIN MODULE, deliberately. lib/rbac.js is the real authority on what a
-   role may do, but it imports models/User.js for ROLES, which pulls mongoose
-   into anything that imports it - fine on the server, fatal in a client
-   component. components/transferConstants.js exists for exactly this reason
-   and this follows it: the constants live here, with no mongoose anywhere
-   near them, so the screen can read them directly.
+   THE RESOURCE LIST IS THE SIDEBAR. It is derived from config/nav.js at
+   module load rather than typed out here, because a permission list that is
+   maintained by hand goes stale the first time somebody adds a screen and
+   forgets: the new page would then be invisible to the permission editor
+   while being perfectly reachable in the app. Deriving it means adding an
+   entry to NAV adds its permissions, and removing one removes them.
 
-   FRONTEND ONLY FOR NOW. Nothing here is fetched and nothing is saved - the
+   One resource per sidebar leaf, keyed by href - the href is already unique
+   and already stable, so it needs no second identifier invented for it.
+
+   FRONTEND ONLY FOR NOW. Nothing here is fetched and nothing is saved. The
    matrix below is the seed the screen opens with, and edits live in React
-   state until the API is built. When it is, ROLES / RESOURCES / ACTIONS stay
-   as the single description of the shape; only DEFAULT_MATRIX and
-   SAMPLE_USERS get replaced by real reads.
+   state until the API is built. When it is, ROLES / ACTIONS / RESOURCES stay
+   as the description of the shape; only the default grants and SAMPLE_USERS
+   get replaced by real reads.
 
-   The role names are spelled exactly as lib/rbac.js already enforces them, so
-   the screen and the server cannot disagree about what a role is called. */
+   Role names are spelled exactly as lib/rbac.js already enforces them, so the
+   screen and the server cannot disagree about what a role is called. */
 
 /* ---------------------------------------------------------------- roles -- */
 
@@ -53,148 +58,204 @@ export const ROLES = [
   },
 ];
 
-/* Super Admin and Admin hold '*' in lib/rbac.js, so their matrix is not a set
-   of choices: every box is on and none of them is editable. */
+/* Super Admin and Admin hold '*' in lib/rbac.js, so their grid is not a set of
+   choices: every box is on and none of them is editable. */
 export const isLockedRole = (role) => Boolean(ROLES.find((r) => r.k === role)?.locked);
 
 /* -------------------------------------------------------------- actions -- */
 
 export const ACTIONS = [
-  { k: 'view', label: 'View' },
   { k: 'create', label: 'Create' },
-  { k: 'edit', label: 'Edit' },
+  { k: 'read', label: 'Read' },
+  { k: 'update', label: 'Update' },
+  { k: 'download', label: 'Download' },
   { k: 'delete', label: 'Delete' },
-  { k: 'approve', label: 'Approve' },
-  { k: 'lock', label: 'Lock' },
-  { k: 'export', label: 'Export' },
-  { k: 'sensitive', label: 'View Sensitive' },
 ];
 
 /* ------------------------------------------------------------ resources --
 
-   One row per module as the sidebar groups them, not one per API route - the
-   matrix is read by whoever administers the system, and they think in screens.
+   Built from NAV. Top-level entries that are a link rather than a group
+   (Dashboard, Logistic, Ledger Transaction) are collected under "General".
 
-   `actions` is which columns APPLY to a row. A column left out renders as a
-   dash rather than an empty box, so "cannot be granted" looks different from
-   "not granted": a Dashboard you can only look at should not offer a Delete
-   checkbox nobody will ever tick. */
+   Logout is not a resource - it is not a screen anybody is granted or denied,
+   and offering "Logout Delete" would be nonsense. */
 
-export const RESOURCES = [
-  { k: 'dashboard', label: 'Dashboard', actions: ['view'] },
-  { k: 'masters', label: 'Masters', actions: ['view', 'create', 'edit', 'delete'] },
-  { k: 'contacts', label: 'Contacts', actions: ['view', 'create', 'edit', 'delete', 'export', 'sensitive'] },
-  { k: 'items', label: 'Inventory & Items', actions: ['view', 'create', 'edit', 'delete', 'export'] },
-  { k: 'barcodes', label: 'Barcode Generation', actions: ['view', 'create', 'edit', 'delete', 'export'] },
-  { k: 'purchase', label: 'Purchase (GRC / GRT)', actions: ['view', 'create', 'edit', 'delete', 'approve', 'export'] },
-  { k: 'purchaseInvoice', label: 'Purchase Invoice', actions: ['view', 'create', 'edit', 'delete', 'approve', 'lock', 'export'] },
-  { k: 'sell', label: 'Sell & Delivery Challan', actions: ['view', 'create', 'edit', 'delete', 'approve', 'export'] },
-  { k: 'pos', label: 'POS', actions: ['view', 'create', 'edit', 'delete', 'export', 'sensitive'] },
-  { k: 'transfers', label: 'Stock Transfers', actions: ['view', 'create', 'edit', 'delete', 'approve', 'lock', 'export'] },
-  { k: 'ic', label: 'Inter Company Sell', actions: ['view', 'create', 'edit', 'delete', 'approve', 'export'] },
-  { k: 'transport', label: 'Transportation', actions: ['view', 'create', 'edit', 'delete', 'export'] },
-  { k: 'vouchers', label: 'Vouchers & Ledger', actions: ['view', 'create', 'edit', 'delete', 'approve', 'lock', 'export', 'sensitive'] },
-  { k: 'reports', label: 'Reports', actions: ['view', 'export', 'sensitive'] },
-  { k: 'users', label: 'Users & Roles', actions: ['view', 'create', 'edit', 'delete', 'sensitive'] },
-];
+const SKIP_HREFS = new Set(['/logout']);
 
-export function appliesTo(resourceKey, actionKey) {
-  const res = RESOURCES.find((r) => r.k === resourceKey);
-  return Boolean(res && res.actions.includes(actionKey));
+function buildGroups() {
+  const groups = [];
+  const general = { group: 'General', resources: [] };
+
+  NAV.forEach((item) => {
+    if (item.href && !item.children) {
+      if (SKIP_HREFS.has(item.href)) return;
+      general.resources.push({ k: item.href, label: item.label, href: item.href, group: 'General' });
+      return;
+    }
+    const resources = (item.children || [])
+      .filter((c) => c.href && !SKIP_HREFS.has(c.href))
+      .map((c) => ({ k: c.href, label: c.label, href: c.href, group: item.label }));
+
+    if (resources.length) groups.push({ group: item.label, resources });
+  });
+
+  /* General first - Dashboard is the screen everybody lands on. */
+  return general.resources.length ? [general, ...groups] : groups;
 }
+
+export const RESOURCE_GROUPS = buildGroups();
+
+export const RESOURCES = RESOURCE_GROUPS.flatMap((g) => g.resources);
+
+/* Two sidebar groups use the same child label (Inter Company Sell and Sell
+   both have a "Delivery Challan"), so a resource is shown with its group when
+   the label alone would be ambiguous. */
+const LABEL_COUNTS = RESOURCES.reduce((acc, r) => {
+  acc[r.label] = (acc[r.label] || 0) + 1;
+  return acc;
+}, {});
+
+export function resourceTitle(resource) {
+  return LABEL_COUNTS[resource.label] > 1
+    ? resource.group + ' ' + resource.label
+    : resource.label;
+}
+
+export const TOTAL_GRANTS = RESOURCES.length * ACTIONS.length;
 
 /* --------------------------------------------------------------- matrix --
 
-   Seeded to match what lib/rbac.js ROLE_PERMISSIONS actually allows today, so
-   the screen opens showing the system's real posture rather than a blank grid
-   somebody has to fill in from memory.
+   Seeded from what lib/rbac.js ROLE_PERMISSIONS actually allows today, so the
+   screen opens on the system's real posture rather than a blank grid somebody
+   has to fill in from memory.
 
-   Written out per role rather than layered, for the same reason rbac.js
-   writes its own table out longhand: reading one block tells you a role's
-   whole reach. */
+   Expressed per sidebar GROUP rather than per screen, because that is the
+   granularity the roles are actually described at - "a cashier runs the till"
+   - with a short list of per-screen exceptions after it for the cases a group
+   rule gets wrong. A resource the rules do not mention is granted nothing. */
 
-function grant(pairs) {
-  const out = {};
-  Object.entries(pairs).forEach(([resource, actions]) => {
-    out[resource] = {};
-    actions.forEach((a) => { out[resource][a] = true; });
-  });
-  return out;
-}
+const ALL = ACTIONS.map((a) => a.k);
+const READ = ['read'];
+const READ_DL = ['read', 'download'];
+const WRITE = ['create', 'read', 'update', 'download'];
+const FULL = ['create', 'read', 'update', 'download', 'delete'];
 
-/* Every applicable box, for the two unrestricted roles. */
-function everything() {
-  const out = {};
-  RESOURCES.forEach((r) => {
-    out[r.k] = {};
-    r.actions.forEach((a) => { out[r.k][a] = true; });
-  });
-  return out;
-}
-
-export const DEFAULT_MATRIX = {
-  'Super Admin': everything(),
-  Admin: everything(),
-
-  /* GRC_MANAGE, BARCODE_*, POS_*, the whole TRANSFER_* set, BILLING_MANAGE
-     and REPORTS_VIEW - everything except administering the system itself. */
-  'Location Manager': grant({
-    dashboard: ['view'],
-    masters: ['view'],
-    contacts: ['view', 'create', 'edit', 'export'],
-    items: ['view', 'create', 'edit', 'export'],
-    barcodes: ['view', 'create', 'edit', 'export'],
-    purchase: ['view', 'create', 'edit', 'delete', 'approve', 'export'],
-    purchaseInvoice: ['view', 'create', 'edit', 'approve', 'lock', 'export'],
-    sell: ['view', 'create', 'edit', 'delete', 'approve', 'export'],
-    pos: ['view', 'create', 'edit', 'export', 'sensitive'],
-    transfers: ['view', 'create', 'edit', 'delete', 'approve', 'lock', 'export'],
-    ic: ['view', 'create', 'edit', 'approve', 'export'],
-    transport: ['view', 'create', 'edit', 'export'],
-    vouchers: ['view', 'create', 'edit', 'approve', 'export'],
-    reports: ['view', 'export'],
-    users: ['view'],
-  }),
+const RULES = {
+  'Location Manager': {
+    groups: {
+      General: READ_DL,
+      Masters: READ_DL,
+      Inventory: WRITE,
+      Contacts: WRITE,
+      Transportation: WRITE,
+      Purchase: FULL,
+      Sell: FULL,
+      'Stock Transfers': FULL,
+      'Inter Company Sell': WRITE,
+      'Main Reports': READ_DL,
+      Reports: READ_DL,
+      'Staff Management': READ,
+      'Cash Register': WRITE,
+      Voucher: WRITE,
+      'E-commerce': READ_DL,
+    },
+    resources: {
+      /* administering the system is not a branch manager's job */
+      '/admin/setting/users': READ,
+      '/admin/staff-management/roles-permissions': READ,
+    },
+  },
 
   /* GRC_VIEW, POS_SELL, POS_RETURN, TRANSFER_RECEIVE, TRANSFER_RETURN,
-     REPORTS_VIEW. Receiving and returning a transfer are edits to a document
-     somebody else raised, which is why Stock Transfers carries Edit but not
-     Create - this branch cannot despatch of its own accord. */
-  'Location User': grant({
-    dashboard: ['view'],
-    masters: ['view'],
-    contacts: ['view'],
-    items: ['view'],
-    barcodes: ['view'],
-    purchase: ['view'],
-    purchaseInvoice: ['view'],
-    sell: ['view', 'create'],
-    pos: ['view', 'create', 'export'],
-    transfers: ['view', 'edit'],
-    ic: ['view'],
-    transport: ['view'],
-    vouchers: ['view'],
-    reports: ['view'],
-  }),
+     REPORTS_VIEW. Receiving and returning a transfer are updates to a
+     document somebody else raised, which is why Stock Transfers carries
+     Update but not Create - this branch cannot despatch of its own accord. */
+  'Location User': {
+    groups: {
+      General: READ,
+      Masters: READ,
+      Inventory: READ,
+      Contacts: READ,
+      Transportation: READ,
+      Purchase: READ,
+      Sell: READ,
+      'Stock Transfers': ['read', 'update'],
+      'Inter Company Sell': ['read', 'update'],
+      'Main Reports': READ,
+      Reports: READ,
+      'Cash Register': READ,
+      Voucher: READ,
+      'E-commerce': READ,
+    },
+    resources: {
+      '/admin/transaction/sell/pos': WRITE,
+      '/admin/transaction/sell/pos-return': WRITE,
+      '/admin/transaction/sell/deliverychallan': WRITE,
+      '/admin/setting/users': [],
+      '/admin/staff-management/roles-permissions': [],
+    },
+  },
 
-  /* POS_SELL, POS_RETURN, REPORTS_VIEW and nothing else. */
-  Cashier: grant({
-    dashboard: ['view'],
-    pos: ['view', 'create', 'export'],
-    reports: ['view'],
-  }),
+  /* POS_SELL, POS_RETURN, REPORTS_VIEW and nothing else. Expressed per
+     screen, because "the till" is three screens and not a sidebar group. */
+  Cashier: {
+    groups: {
+      General: READ,
+      'Main Reports': READ,
+      Reports: READ,
+    },
+    resources: {
+      '/admin/transaction/sell/pos': WRITE,
+      '/admin/transaction/sell/pos-return': WRITE,
+      '/admin/cashregister': READ,
+      '/admin/cashregister/open': ['create', 'read', 'update'],
+    },
+  },
 };
+
+function grantsFor(role, resource) {
+  if (isLockedRole(role)) return ALL;
+  const rule = RULES[role];
+  if (!rule) return [];
+  if (Object.prototype.hasOwnProperty.call(rule.resources || {}, resource.k)) {
+    return rule.resources[resource.k];
+  }
+  return (rule.groups || {})[resource.group] || [];
+}
+
+function buildMatrix() {
+  const out = {};
+  ROLES.forEach((r) => {
+    out[r.k] = {};
+    RESOURCES.forEach((res) => {
+      out[r.k][res.k] = {};
+      grantsFor(r.k, res).forEach((a) => { out[r.k][res.k][a] = true; });
+    });
+  });
+  return out;
+}
+
+export const DEFAULT_MATRIX = buildMatrix();
 
 /* How many boxes a role holds - the "reach" figure on the Roles tab. */
 export function grantedCount(matrix, role) {
   const held = (matrix && matrix[role]) || {};
   return RESOURCES.reduce(
-    (n, r) => n + r.actions.filter((a) => held[r.k] && held[r.k][a]).length,
+    (n, r) => n + ACTIONS.filter((a) => held[r.k] && held[r.k][a.k]).length,
     0
   );
 }
 
-export const TOTAL_GRANTS = RESOURCES.reduce((n, r) => n + r.actions.length, 0);
+/* Granted / total within one sidebar group, for the group header. */
+export function groupTally(matrix, role, group) {
+  const held = (matrix && matrix[role]) || {};
+  const resources = RESOURCE_GROUPS.find((g) => g.group === group)?.resources || [];
+  const on = resources.reduce(
+    (n, r) => n + ACTIONS.filter((a) => held[r.k] && held[r.k][a.k]).length,
+    0
+  );
+  return { on, total: resources.length * ACTIONS.length };
+}
 
 /* ---------------------------------------------------------------- users --
 

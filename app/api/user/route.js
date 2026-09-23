@@ -1,6 +1,7 @@
 import { isValidObjectId } from 'mongoose';
 import dbConnect from '@/lib/db';
 import User, { ROLES } from '@/models/User';
+import Role from '@/models/Role';
 import { handler, json } from '@/lib/apiError';
 import { requirePermission, PERMISSIONS } from '@/lib/rbac';
 import { escapeRegex } from '@/lib/validate';
@@ -70,7 +71,11 @@ export const POST = handler(async (req) => {
   const data = body?.data || {};
   await dbConnect();
 
-  const errors = validate(data, { isNew: true });
+  const business = isValidObjectId(body.business) ? body.business : null;
+  const errors = validate(data, {
+    isNew: true,
+    allowedRoles: await allowedRoleNames(business),
+  });
   if (Object.keys(errors).length) return json({ errors }, 422);
 
   const email = String(data.email).toLowerCase().trim();
@@ -84,7 +89,7 @@ export const POST = handler(async (req) => {
     password: hashPassword(data.password),
     role: data.role || ROLES.LOCATION_USER,
     isActive: data.isActive !== false && data.isActive !== 'false',
-    businessId: isValidObjectId(body.business) ? body.business : null,
+    businessId: business,
     locationIds: toIds(data.locationIds),
     allow: toList(data.allow),
     deny: toList(data.deny),
@@ -95,7 +100,20 @@ export const POST = handler(async (req) => {
 
 /* ------------------------------------------------------------- shared ---- */
 
-export function validate(data, { isNew }) {
+/* The role names an account may be given: the five from the code plus the
+   ones this business has created on the Roles & Permissions screen.
+
+   Read from the database rather than a fixed list, because custom roles are
+   rows (models/Role.js). Scoped to the business so one branch's invented role
+   cannot be assigned inside another. */
+export async function allowedRoleNames(businessId) {
+  const built = Object.values(ROLES);
+  if (!businessId || !isValidObjectId(businessId)) return built;
+  const rows = await Role.find({ businessId }).select('name').lean();
+  return [...built, ...rows.map((r) => r.name).filter(Boolean)];
+}
+
+export function validate(data, { isNew, allowedRoles }) {
   const errors = {};
   if (!String(data.name || '').trim()) errors.name = 'Name is required';
 
@@ -110,8 +128,11 @@ export function validate(data, { isNew }) {
     errors.password = 'Use at least 8 characters';
   }
 
-  if (data.role && !Object.values(ROLES).includes(data.role)) {
-    errors.role = 'Choose one of: ' + Object.values(ROLES).join(', ');
+  /* Defaults to the built-ins when the caller did not look custom roles up,
+     so an older call site cannot accidentally widen what is accepted. */
+  const allowed = allowedRoles && allowedRoles.length ? allowedRoles : Object.values(ROLES);
+  if (data.role && !allowed.includes(data.role)) {
+    errors.role = 'Choose one of: ' + allowed.join(', ');
   }
   return errors;
 }

@@ -4,7 +4,7 @@ import User from '@/models/User';
 import { handler, json } from '@/lib/apiError';
 import { requirePermission, PERMISSIONS } from '@/lib/rbac';
 import { hashPassword } from '@/lib/auth';
-import { validate, toIds, toList } from '../route';
+import { validate, toIds, toList, allowedRoleNames } from '../route';
 
 /* /api/user/<id> - read, update, deactivate one account. */
 
@@ -31,7 +31,16 @@ export const PUT = handler(async (req, { params }) => {
 
   if (!isValidObjectId(id)) return json({ error: 'Not found', code: 'NOT_FOUND' }, 404);
 
-  const errors = validate(data, { isNew: false });
+  /* The account's own business decides which custom roles are on offer; the
+     body's business is only used when it is actually changing. */
+  const existing = await User.findById(id).select('businessId').lean();
+  if (!existing) return json({ error: 'User not found.', code: 'NOT_FOUND' }, 404);
+  const business = isValidObjectId(body.business) ? body.business : existing.businessId;
+
+  const errors = validate(data, {
+    isNew: false,
+    allowedRoles: await allowedRoleNames(business),
+  });
   if (Object.keys(errors).length) return json({ errors }, 422);
 
   const email = String(data.email).toLowerCase().trim();

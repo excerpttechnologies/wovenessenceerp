@@ -1,6 +1,10 @@
 import dbConnect from '@/lib/db';
 import IcDeliveryChallan from '@/models/IcDeliveryChallan';
 import { requireSession } from '@/lib/session';
+import { screenDenial, SCREENS, ACTIONS as PERM } from '@/lib/screenPermission';
+
+const IC_DC = { screen: SCREENS.IC_DELIVERY_CHALLAN, label: 'inter company delivery challans' };
+
 import { validate } from '@/lib/validate';
 import { FIELDS, computeTotals } from '@/app/admin/transaction/intercompanysell/deliverychallan/fields';
 
@@ -36,6 +40,14 @@ export async function GET(req, { params }) {
 
   const doc = await IcDeliveryChallan.findById(id).lean();
   if (!doc) return json({ doc: null }, 404);
+
+  /* Scoped to the challan's own business - the id arrives in the path, so
+     there is no query string to take it from. */
+  const denied = await screenDenial({
+    session, ...IC_DC, action: PERM.READ, businessId: doc.businessId,
+  });
+  if (denied) return json({ error: denied.message, code: denied.code }, 403);
+
   return json({ doc: { ...doc, _id: String(doc._id) } });
 }
 
@@ -50,8 +62,14 @@ export async function PUT(req, { params }) {
   /* A challan already pulled into an invoice must not change underneath it -
      the invoice's own lines were copied from these. Release it by deleting
      the invoice, then edit. */
-  const existing = await IcDeliveryChallan.findById(id).select('icSalesInvoiceId').lean();
+  const existing = await IcDeliveryChallan.findById(id).select('icSalesInvoiceId businessId').lean();
   if (!existing) return json({ error: 'Not found' }, 404);
+
+  const denied = await screenDenial({
+    session, ...IC_DC, action: PERM.UPDATE, businessId: body.business || existing.businessId,
+  });
+  if (denied) return json({ error: denied.message, code: denied.code }, 403);
+
   if (existing.icSalesInvoiceId) {
     return json(
       { error: 'This challan is already on an inter company sales invoice and cannot be edited.' },
@@ -80,8 +98,14 @@ export async function DELETE(req, { params }) {
   const { id } = await params;
   await dbConnect();
 
-  const existing = await IcDeliveryChallan.findById(id).select('icSalesInvoiceId').lean();
+  const existing = await IcDeliveryChallan.findById(id).select('icSalesInvoiceId businessId').lean();
   if (!existing) return json({ ok: true });
+
+  const denied = await screenDenial({
+    session, ...IC_DC, action: PERM.DELETE, businessId: existing.businessId,
+  });
+  if (denied) return json({ error: denied.message, code: denied.code }, 403);
+
   if (existing.icSalesInvoiceId) {
     return json(
       { error: 'This challan is on an inter company sales invoice. Delete the invoice first.' },
