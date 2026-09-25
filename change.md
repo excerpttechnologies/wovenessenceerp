@@ -44,6 +44,7 @@
 - app/api/location-setting/route.js
 - app/api/invoice-layout-setting/route.js
 - app/api/business-contact/route.js
+- components/PosTill.jsx
 
 ## 24-09-2026
 

@@ -15,13 +15,34 @@ const PAYMENT_MODES = ['Cash', 'Credit', 'Export', 'COD'];
 const MULTI_PAYMENT_METHODS = ['Cash', 'UPI', 'Bank Deposit'];
 const CUSTOMER_DEFAULTS = {
   typeId: '', businessType: 'Un-Registered', gstNo: '', businessName: '', shortName: '',
-  prefix: 'Mr.', firstName: '', middleName: '', lastName: '', dob: '', gender: '',
-  billingAddressLine1: '', billingAddressLine2: '', billingCity: '', billingState: '',
+  prefix: 'Mr.', firstName: '', middleName: '', lastName: '', dob: '', gender: 'Male',
+  billingAddressLine1: '', billingAddressLine2: '',
+  /* the counter is in Bangalore, so that is the city nearly every walk-in customer gets.
+     Stored exactly as /api/cities returns it - the picker's value IS the city name,
+     and the list also holds 'Bangalore Urban' and 'Bangalore Rural', so the spelling has
+     to match the plain one or the box would open blank. State and Country stay empty,
+     exactly as they do when the city is picked by hand: only the Zip box fills those. */
+  billingCity: 'Bangalore', billingState: '',
   billingCountry: '', billingDistrict: '', billingTaluk: '', billingZipCode: '',
   billingMobile: '', billingAlternateContactNumber: '', billingLandline: '', billingFax: '',
   billingEmail: '', billingEmail2: '', billingWebsiteUrl: '',
   additionalDetails: '',
 };
+/* A title that states the customer's gender fills the Gender box for the
+   operator. Only the three that actually carry one are mapped: Dr., Prof.,
+   CA, Sr., Fr. and M/s. say nothing about gender (M/s. is a firm), so
+   choosing one of those leaves whatever the operator has already picked. */
+const GENDER_FOR_PREFIX = { 'Mr.': 'Male', 'Mrs.': 'Female', 'Ms.': 'Female' };
+
+/* The counter sells to walk-in shoppers far more often than to another
+   branch, so the Type box opens on Retail rather than on whichever type
+   happens to have been created first. Matched on the label because the ids
+   are per business; falls back to the old behaviour when no type is named
+   Retail. */
+const retailFirst = (types) => (
+  (types.find((t) => /^\s*retail\s*$/i.test(String(t.label || ''))) || types[0] || {}).value || ''
+);
+
 const money = (value) => Number(value || 0).toFixed(2);
 const customerLabel = (customer) => {
   const name = [customer.businessName, customer.firstName, customer.middleName, customer.lastName]
@@ -127,16 +148,19 @@ function Calculator({ onClose }) {
    City, Zip and Mobile are rendered separately above because they are not
    plain text boxes - City is the searchable picker and Zip auto-fills the
    address fields. */
+/* State, Country, District, Taluk and Fax are deliberately NOT here: the
+   counter does not type them, so the boxes only lengthened the dialog. Nor is
+   Landline, for the same reason.
+
+   They are hidden, not removed. Each one stays in CUSTOMER_DEFAULTS and is
+   still submitted, and the Zip Code box still fills state / country /
+   district / taluk from the pincode exactly as before - it just does it out
+   of sight now. The full Customer master screen still shows all of them, so
+   nothing is lost from a record created here. */
 const BILLING_ROWS = [
   ['billingAddressLine1', 'Address Line 1'],
   ['billingAddressLine2', 'Address Line 2'],
-  ['billingState', 'State'],
-  ['billingCountry', 'Country'],
-  ['billingDistrict', 'District'],
-  ['billingTaluk', 'Taluk'],
   ['billingAlternateContactNumber', 'Alternate Contact'],
-  ['billingLandline', 'Landline'],
-  ['billingFax', 'Fax'],
   ['billingEmail', 'Email'],
   ['billingEmail2', 'Email 2'],
   ['billingWebsiteUrl', 'Website URL'],
@@ -168,8 +192,21 @@ function CustomerForm({ values, setValues, typeOptions, onClose, onSave, saving 
           </select></label>
           {text('gstNo', 'GST NO (ex: 22AAAAA0000A1Z5)')}
           {text('businessName', 'Business Name')}
-          {text('shortName', 'Short Name')}
-          <label className="f-label">Prefix<select className="f-input" value={values.prefix} onChange={(e) => set('prefix', e.target.value)}>
+          {/* Short Name is hidden, not removed - it stays in CUSTOMER_DEFAULTS
+              and is still submitted, and the full Customer master screen still
+              shows it. Same call as State / Country / District / Taluk / Fax
+              below: the counter does not type it. */}
+          <label className="f-label">Prefix<select className="f-input" value={values.prefix} onChange={(e) => {
+            const next = e.target.value;
+            /* one setValues, not set() twice: two calls in the same handler
+               would each start from the same snapshot and the second would
+               drop the first. */
+            setValues((current) => ({
+              ...current,
+              prefix: next,
+              gender: GENDER_FOR_PREFIX[next] || current.gender,
+            }));
+          }}>
             {/* <option>Mr.</option><option>Mrs.</option><option>Ms.</option><option>Dr.</option> */}
           
             <option>Mr.</option>
@@ -206,7 +243,7 @@ function CustomerForm({ values, setValues, typeOptions, onClose, onSave, saving 
             below Shipping Details. This dialog has no shipping block, so it
             goes at the end. */}
         <div className="form-section-title mt-4 border-t border-line pt-3">Additional Details</div>
-        <label className="f-label block">Additional Details
+        <label className="f-label block">
           <textarea className="f-input f-textarea" value={values.additionalDetails || ''}
             placeholder="Any additional details about this customer"
             onChange={(e) => set('additionalDetails', e.target.value)} />
@@ -786,7 +823,7 @@ export default function PosTill() {
     setCustomer('walkin');
     setCustomerForm((current) => ({
       ...CUSTOMER_DEFAULTS,
-      typeId: current.typeId || customerTypes[0]?.value || '',
+      typeId: retailFirst(customerTypes) || current.typeId || '',
       billingMobile: customerSearch.trim(),
     }));
     setShowCustomerForm(true);
@@ -890,9 +927,9 @@ export default function PosTill() {
         business={business}
         fallbackCustomer={selectedCustomer}
       />
-      {previewImage && <div className="fixed inset-0 z-[70] flex items-center justify-center bg-black/75 p-6" onClick={() => setPreviewImage(null)}><div className="relative max-h-[70vh] max-w-2xl rounded bg-white p-2 shadow-2xl" onClick={(e) => e.stopPropagation()}><button type="button" aria-label="Close image preview" className="absolute right-2 top-2 z-10 flex h-8 w-8 items-center justify-center rounded-full bg-black/70 text-white" onClick={() => setPreviewImage(null)}><Icon name="x" size={16} /></button><img src={previewImage.src} alt={previewImage.alt} className="max-h-[65vh] max-w-[60vw] object-contain" /></div></div>}
+      {previewImage && <div className={'fixed inset-0 z-[70] flex items-center justify-center bg-black/75 p-6' + (previewImage.hover ? ' pointer-events-none' : '')} onClick={() => setPreviewImage(null)}><div className="relative max-h-[70vh] max-w-2xl rounded bg-white p-2 shadow-2xl" onClick={(e) => e.stopPropagation()}>{!previewImage.hover && <button type="button" aria-label="Close image preview" className="absolute right-2 top-2 z-10 flex h-8 w-8 items-center justify-center rounded-full bg-black/70 text-white" onClick={() => setPreviewImage(null)}><Icon name="x" size={16} /></button>}<img src={previewImage.src} alt={previewImage.alt} className="max-h-[65vh] max-w-[60vw] object-contain" /></div></div>}
       {msg && <div className="mx-4 mt-2 flash flash-err">{msg}</div>}
-      <div className="mt-3 flex-1 overflow-x-auto px-4"><table className="dt"><thead><tr>{['#', 'Barcode No', 'Stock Issue', 'Item Code', 'Print Description', 'HSN', 'GST%', 'Qty', 'RSP Price', 'Disc %', 'Disc Amt', 'Line Total', 'Sales Person', 'Image', ''].map((heading) => <th key={heading} className={'!whitespace-normal !leading-tight' + (heading === '#' ? ' !w-9 !px-1.5 !text-left' : '')}>{heading}</th>)}</tr></thead><tbody>{rows.length === 0 ? <tr><td colSpan="15" className="dt-empty">No Items Added</td></tr> : rows.map((row, index) => <tr key={`${row.itemId}-${index}`} className="cursor-pointer !bg-[#FFF3CD]" onClick={() => setSelectedProduct(row)}><td className={'!w-9 !px-1.5 !text-left'}>{index + 1}</td><td className={row.isReturn ? '!text-danger font-semibold' : undefined}>{row.barcode || '-'}</td><td><input type="checkbox" checked={!!row.stockIssue} onClick={(e) => e.stopPropagation()} onChange={(e) => updateItem(index, 'stockIssue', e.target.checked)} /></td><td>{row.code}</td><td>{row.description || row.name}</td><td>{row.hsn}</td><td>{money(row.gst)}</td><td>{(() => { const closing = row.closing; const known = closing !== undefined && closing !== null; const over = known && Number(row.qty || 0) > Number(closing); return (<div className="flex flex-col items-center gap-0.5" onClick={(e) => e.stopPropagation()}><div className="flex items-center justify-center gap-1"><button type="button" aria-label="Decrease quantity" className="inline-flex h-[26px] w-[26px] shrink-0 items-center justify-center rounded border border-line bg-pillgrey text-[15px] font-bold leading-none text-ink hover:bg-linestrong disabled:opacity-40" disabled={Number(row.qty || 0) <= 1} onClick={() => updateItem(index, 'qty', Math.max(1, Number(row.qty || 1) - 1))}>-</button><input data-qty-row={index} className={'f-input w-14 text-center' + (over ? ' border-danger text-danger' : '')} type="number" min="1" max={known ? closing : undefined} value={row.qty} onWheel={(e) => e.currentTarget.blur()} onFocus={() => updateItem(index, 'qty', '')} /* min="1" only limits the spinner - a negative can still be typed or pasted, and it flips the whole bill: -222 x 600 billed -133,200.00. Anything below 1 becomes 1. '' is kept so the box can be cleared and retyped, which is what onFocus above relies on. */ onChange={(e) => { const v = e.target.value; updateItem(index, 'qty', v === '' ? '' : (Number(v) < 1 ? 1 : v)); }} /><button type="button" aria-label="Increase quantity" className="inline-flex h-[26px] w-[26px] shrink-0 items-center justify-center rounded border border-line bg-pillgrey text-[15px] font-bold leading-none text-ink hover:bg-linestrong disabled:opacity-40" disabled={known && Number(row.qty || 0) >= Number(closing)} onClick={() => updateItem(index, 'qty', Number(row.qty || 0) + 1)}>+</button></div>{known && <span className={'text-[11px] ' + (over ? 'font-semibold text-danger' : 'text-inkmuted')}>{over ? 'Only ' + closing + ' in stock' : 'Closing: ' + closing}</span>}</div>); })()}</td><td><input className="f-input w-24" type="number" min="0" value={row.rsp} onWheel={(e) => e.currentTarget.blur()} onChange={(e) => updateItem(index, 'rsp', e.target.value)} /></td><td><input className="f-input w-20" type="number" min="0" max="100" value={row.discountPct} onWheel={(e) => e.currentTarget.blur()} /* a discount over 100% turns the line NEGATIVE - the bill then pays the customer. Clamped here as well as with max= because max only stops the spinner, not typing or pasting. */ onChange={(e) => { const v = e.target.value; updateItem(index, 'discountPct', v === '' ? '' : Math.min(100, Math.max(0, Number(v)))); }} /></td><td>{money(row.discountAmount)}</td><td className={row.isReturn ? '!text-danger font-semibold' : undefined}>{money(row.lineTotal)}</td><td><select className="f-input min-w-35" value={row.salesPerson || ''} onChange={(e) => updateItem(index, 'salesPerson', e.target.value)}><option value="">Select...</option>{salesPeople.map((person) => <option key={person.value} value={person.value}>{person.label}</option>)}</select></td><td><ProductImage src={row.image} alt={row.name} size={56} onOpen={() => { setSelectedProduct(row); setPreviewImage({ src: row.image, alt: row.name }); }} /></td><td><button type="button" className="act-btn bg-danger" onClick={(e) => { e.stopPropagation(); setItems((current) => current.filter((_, itemIndex) => itemIndex !== index)); if (selectedProduct?.itemId === row.itemId) setSelectedProduct(null); }}><Icon name="x" size={12} /></button></td></tr>)}</tbody></table></div>
+      <div className="mt-3 flex-1 overflow-x-auto px-4"><table className="dt"><thead><tr>{['#', 'Barcode No', 'Stock Issue', 'Item Code', 'Print Description', 'HSN', 'GST%', 'Qty', 'RSP Price', 'Disc %', 'Disc Amt', 'Line Total', 'Sales Person', 'Image', ''].map((heading) => <th key={heading} className={'!whitespace-normal !leading-tight' + (heading === '#' ? ' !w-9 !px-1.5 !text-left' : '')}>{heading}</th>)}</tr></thead><tbody>{rows.length === 0 ? <tr><td colSpan="15" className="dt-empty">No Items Added</td></tr> : rows.map((row, index) => <tr key={`${row.itemId}-${index}`} className="cursor-pointer !bg-[#FFF3CD]" onClick={() => setSelectedProduct(row)}><td className={'!w-9 !px-1.5 !text-left'}>{index + 1}</td><td className={row.isReturn ? '!text-danger font-semibold' : undefined}>{row.barcode || '-'}</td><td><input type="checkbox" checked={!!row.stockIssue} onClick={(e) => e.stopPropagation()} onChange={(e) => updateItem(index, 'stockIssue', e.target.checked)} /></td><td>{row.code}</td><td>{row.description || row.name}</td><td>{row.hsn}</td><td>{money(row.gst)}</td><td>{(() => { const closing = row.closing; const known = closing !== undefined && closing !== null; const over = known && Number(row.qty || 0) > Number(closing); return (<div className="flex flex-col items-center gap-0.5" onClick={(e) => e.stopPropagation()}><div className="flex items-center justify-center gap-1"><button type="button" aria-label="Decrease quantity" className="inline-flex h-[26px] w-[26px] shrink-0 items-center justify-center rounded border border-line bg-pillgrey text-[15px] font-bold leading-none text-ink hover:bg-linestrong disabled:opacity-40" disabled={Number(row.qty || 0) <= 1} onClick={() => updateItem(index, 'qty', Math.max(1, Number(row.qty || 1) - 1))}>-</button><input data-qty-row={index} className={'f-input w-14 text-center' + (over ? ' border-danger text-danger' : '')} type="number" min="1" max={known ? closing : undefined} value={row.qty} onWheel={(e) => e.currentTarget.blur()} onFocus={() => updateItem(index, 'qty', '')} /* min="1" only limits the spinner - a negative can still be typed or pasted, and it flips the whole bill: -222 x 600 billed -133,200.00. Anything below 1 becomes 1. '' is kept so the box can be cleared and retyped, which is what onFocus above relies on. */ onChange={(e) => { const v = e.target.value; updateItem(index, 'qty', v === '' ? '' : (Number(v) < 1 ? 1 : v)); }} /><button type="button" aria-label="Increase quantity" className="inline-flex h-[26px] w-[26px] shrink-0 items-center justify-center rounded border border-line bg-pillgrey text-[15px] font-bold leading-none text-ink hover:bg-linestrong disabled:opacity-40" disabled={known && Number(row.qty || 0) >= Number(closing)} onClick={() => updateItem(index, 'qty', Number(row.qty || 0) + 1)}>+</button></div>{known && <span className={'text-[11px] ' + (over ? 'font-semibold text-danger' : 'text-inkmuted')}>{over ? 'Only ' + closing + ' in stock' : 'Closing: ' + closing}</span>}</div>); })()}</td><td><input className="f-input w-24" type="number" min="0" value={row.rsp} onWheel={(e) => e.currentTarget.blur()} onChange={(e) => updateItem(index, 'rsp', e.target.value)} /></td><td><input className="f-input w-20" type="number" min="0" max="100" value={row.discountPct} onWheel={(e) => e.currentTarget.blur()} /* a discount over 100% turns the line NEGATIVE - the bill then pays the customer. Clamped here as well as with max= because max only stops the spinner, not typing or pasting. */ onChange={(e) => { const v = e.target.value; updateItem(index, 'discountPct', v === '' ? '' : Math.min(100, Math.max(0, Number(v)))); }} /></td><td>{money(row.discountAmount)}</td><td className={row.isReturn ? '!text-danger font-semibold' : undefined}>{money(row.lineTotal)}</td><td><select className="f-input min-w-35" value={row.salesPerson || ''} onChange={(e) => updateItem(index, 'salesPerson', e.target.value)}><option value="">Select...</option>{salesPeople.map((person) => <option key={person.value} value={person.value}>{person.label}</option>)}</select></td><td onMouseEnter={() => row.image && setPreviewImage({ src: row.image, alt: row.name, hover: true })} onMouseLeave={() => setPreviewImage((p) => (p && p.hover ? null : p))}><ProductImage src={row.image} alt={row.name} size={56} onOpen={() => { setSelectedProduct(row); setPreviewImage({ src: row.image, alt: row.name, hover: false }); }} /></td><td><button type="button" className="act-btn bg-danger" onClick={(e) => { e.stopPropagation(); setItems((current) => current.filter((_, itemIndex) => itemIndex !== index)); if (selectedProduct?.itemId === row.itemId) setSelectedProduct(null); }}><Icon name="x" size={12} /></button></td></tr>)}</tbody></table></div>
       
       <div className="border-t border-line px-4 pt-2"><div className="grid grid-cols-2 gap-2 text-[13px] md:grid-cols-6"><div><div className="text-cell">Qty</div><div>{qty}</div></div><div><div className="text-cell">Bill Value</div><div>{money(rows.reduce((sum, row) => sum + (row.isReturn ? -1 : 1) * Number(row.rsp || 0) * Number(row.qty || 0), 0))}</div></div><div><div className="text-cell">Total Discount</div><div>{money(rows.reduce((sum, row) => sum + row.discountAmount, 0))}</div></div><div><div className="text-cell">Sub Total</div><div>{money(billValue)}</div></div>
       
