@@ -242,8 +242,15 @@ export const POST = handler(async (req) => {
 
        Inside the same transaction as the invoice: a bill that rolls back must
        not leave an adjustment behind pointing at a sale that never happened. */
-    const issueLines = (doc.items || []).filter((l) => l.stockIssue === true);
-    if (issueLines.length) {
+    /* ONE VOCABULARY ACROSS BOTH SCREENS. The manual adjustment screen's scan
+       tabs are "Stock Addition" and "Stock Subtraction", and the rows it
+       writes carry type "Addition" - so the till files "Subtraction" and
+       "Addition" rather than the "ISSUE" it used to write, which was the same
+       idea under a third name. Rows already stored as "ISSUE" keep that value;
+       nothing rewrites history. */
+    const registerEntry = async (lines, type, reason) => {
+      if (!lines.length) return;
+
       const adjustmentNo = await nextDocNumber(
         StockAdjustment, 'adjustmentNo', 'Stock Adjustment',
         { businessId: doc.businessId, locationId: doc.locationId, finYear: doc.finYear },
@@ -255,14 +262,25 @@ export const POST = handler(async (req) => {
         locationId: doc.locationId,
         finYear: doc.finYear,
         adjustmentNo,
-        type: 'ISSUE',
-        adjustmentReason: 'POS Stock Issue',
+        type,
+        adjustmentReason: reason,
         adjustmentDate: doc.date,
         remarks: 'Auto-created from POS invoice ' + (invoice.invoiceNo || ''),
         createdBy: session?.name || session?.email || '',
-        items: issueLines,
+        items: lines,
       }], dbSession ? { session: dbSession } : {});
-    }
+    };
+
+    /* Each tick files its own document, so a bill carrying both produces one
+       of each rather than a mixed one that neither screen could read. */
+    await registerEntry(
+      (doc.items || []).filter((l) => l.stockIssue === true),
+      'Subtraction', 'POS Stock Issue'
+    );
+    await registerEntry(
+      (doc.items || []).filter((l) => l.stockAddition === true),
+      'Addition', 'POS Stock Addition'
+    );
 
     return invoice;
   });

@@ -1582,6 +1582,42 @@ export default function ListView({ cfg, slug }) {
   const columns = cfg.columns || [];
   const actionPos = cfg.actionPosition || "right";
   const actionVariant = cfg.actionVariant || "icons";
+
+  /* Colour for an action button, taken from the icon the cfg already names -
+     so a list says what an action IS and gets the colour that goes with it,
+     rather than declaring the same thing twice. `tone` on the entry overrides
+     it for anything unusual. */
+  const ACTION_TONE = {
+    eye: "bg-[#2b7fd4] text-white",
+    ledger: "bg-okgreen text-white",
+    printer: "bg-[#495464] text-white",
+    file: "bg-[#495464] text-white",
+    pencil: "bg-warnyellow text-ink",
+    trash: "bg-danger text-white",
+    share: "bg-[#2b7fd4] text-white",
+    upload: "bg-[#6b7280] text-white",
+  };
+
+  /* The row's action entries, already filtered by permission and with their
+     hrefs resolved. Shared by the dropdown and the buttons variant so the two
+     can never offer different things.
+
+     An entry is dropped when the role may not do it. `action: 'delete'` says
+     so by itself; anything else declares `need` in the cfg, because a link's
+     label is not something to guess a permission from. */
+  const rowActions = (row) => (
+    cfg.actionMenu || [
+      { label: "Edit", icon: "pencil", to: (r) => base + "/" + r._id, need: "update" },
+    ]
+  )
+    .filter((m) => {
+      if (m.action === 'delete') return mayDelete;
+      if (m.need === 'update') return mayUpdate;
+      if (m.need === 'create') return mayCreate;
+      if (m.need === 'delete') return mayDelete;
+      return true;
+    })
+    .map((m) => ({ ...m, href: m.to ? m.to(row) : undefined, rowId: row._id }));
  
   const slugPath = cfg.slugPath || slug;
   const base = (cfg.basePath || "/admin/setting/") + slugPath;
@@ -2032,33 +2068,7 @@ export default function ListView({ cfg, slug }) {
                       <td>
                         {actionVariant === "dropdown" ? (
                           <ActionMenu
-                            items={(
-                              cfg.actionMenu || [
-                                {
-                                  label: "Edit",
-                                  icon: "pencil",
-                                  to: (r) => base + "/" + r._id,
-                                  need: "update",
-                                },
-                              ]
-                            )
-                              /* An entry is dropped when the role may not do
-                                 it. `action: 'delete'` says so by itself;
-                                 anything else declares `need` in the cfg,
-                                 because a link's label is not something to
-                                 guess a permission from. */
-                              .filter((m) => {
-                                if (m.action === 'delete') return mayDelete;
-                                if (m.need === 'update') return mayUpdate;
-                                if (m.need === 'create') return mayCreate;
-                                if (m.need === 'delete') return mayDelete;
-                                return true;
-                              })
-                              .map((m) => ({ 
-                              ...m, 
-                              href: m.to ? m.to(row) : undefined,
-                              rowId: row._id 
-                            }))}
+                            items={rowActions(row)}
                             emptyReason="You do not have permission for any action on this screen."
                             open={menuFor === row._id}
                             onToggle={() =>
@@ -2077,6 +2087,45 @@ export default function ListView({ cfg, slug }) {
                               }
                             }}
                           />
+                        ) : actionVariant === "buttons" ? (
+                          /* The same entries the dropdown would list, laid out
+                             in a row. Used where the actions go to different
+                             places - POS has view, payments and print - which
+                             the icons variant below cannot express, because it
+                             builds every destination as base + /:id. */
+                          <span className="inline-flex flex-nowrap items-center gap-1 whitespace-nowrap">
+                            {rowActions(row).length === 0 ? (
+                              <span className="text-[11px] text-inkmuted">No actions</span>
+                            ) : rowActions(row).map((m) => (
+                              <button
+                                key={m.label}
+                                type="button"
+                                /* flex-nowrap above and whitespace-nowrap here
+                                   keep the set on ONE line - they were wrapping
+                                   onto a second row and pushing every other
+                                   column narrow enough to wrap in turn. */
+                                /* ICON ONLY. The label moves to title and
+                                   aria-label, so the button still says what it
+                                   is to a tooltip and to a screen reader while
+                                   the column gives its width back to the data.
+                                   Square and 32px tall - big enough to hit
+                                   accurately at a counter. */
+                                className={'inline-flex h-8 w-8 shrink-0 items-center justify-center rounded '
+                                  + (m.tone
+                                    || (m.action === 'delete' ? ACTION_TONE.trash : '')
+                                    || ACTION_TONE[m.icon]
+                                    || 'bg-brand text-white')}
+                                title={m.label}
+                                aria-label={m.label}
+                                onClick={() => {
+                                  if (m.action === 'delete') { remove(m.rowId); return; }
+                                  if (m.href) router.push(m.href);
+                                }}
+                              >
+                                <Icon name={m.icon || 'eye'} size={15} />
+                              </button>
+                            ))}
+                          </span>
                         ) : (
                           <span className="inline-flex items-center gap-1.5">
                             {(

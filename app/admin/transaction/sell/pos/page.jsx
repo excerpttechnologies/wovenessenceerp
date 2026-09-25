@@ -11,7 +11,9 @@ const CONFIG = {
   scope: ["business","location","finYear"],
   addHref: "/admin/pos/add",
   actionPosition: "left",
-  actionVariant: "dropdown",
+  /* three different destinations - view, payments, print - shown side by
+     side rather than behind one Action menu. */
+  actionVariant: "buttons",
   actionMenu: [
     { label: "View", icon: "eye", to: (row) => `/admin/transaction/sell/pos/view/${row._id}` },
     { label: "View Payments", icon: "ledger", to: (row) => `/admin/transaction/sell/pos/payment/${row._id}` },
@@ -23,8 +25,10 @@ const CONFIG = {
     { k: "endDate", label: "End Date", type: "date" },
   ],
   columns: [
-    { k: "businessName", t: "Business" },
-    { k: "locationName", t: "Location" },
+    /* Business and Location are not listed: this screen is already scoped by
+       the company and location pickers in the top bar, so every row repeated
+       the same two values and cost the columns that vary their width. The
+       fields are still returned by the API and still exported. */
     { k: "date", t: "Date", f: "date" },
     { k: "invoiceNo", t: "Invoice No" },
     { k: "counterName", t: "Counter" },

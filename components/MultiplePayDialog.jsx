@@ -15,7 +15,8 @@ import Icon from '@/components/Icon';
 /* The methods every bill offers. Anything else - PhonePe, GPay, a card
    machine - is added on the spot with the + button and travels with the
    invoice, so this list stays short rather than trying to name every wallet. */
-const MULTI_PAYMENT_METHODS = ['Cash', 'UPI', 'Bank Deposit'];
+const UPI_METHOD = 'UPI/Card';
+const MULTI_PAYMENT_METHODS = ['Cash', UPI_METHOD, 'Bank Deposit'];
 /* The wallets offered behind the + on the UPI row. They are all UPI, so they
    sit under it rather than cluttering the main list. */
 const UPI_PROVIDERS = ['PayTM', 'PhonePe', 'GPay'];
@@ -29,7 +30,7 @@ const sameMethod = (a, b) => String(a || '').trim().toLowerCase() === String(b |
    it settles like one. */
 function insertUnderUpi(rows, extras) {
   if (!extras.length) return rows;
-  const upiAt = rows.findIndex((p) => sameMethod(p.method, 'UPI'));
+  const upiAt = rows.findIndex((p) => sameMethod(p.method, UPI_METHOD));
   if (upiAt === -1) return [...rows, ...extras];
   let at = upiAt + 1;
   while (at < rows.length && rows[at].custom) at += 1;
@@ -133,7 +134,7 @@ export default function MultiplePayDialog({
                     wallet that was added from it. Every other row keeps an empty
                     cell so the three inputs stay aligned down the column. */}
                 <span className="relative flex w-6 justify-center">
-                  {payment.method === 'UPI' && (
+                  {sameMethod(payment.method, UPI_METHOD) && (
                     <>
                       <button type="button" aria-label="Add UPI provider" title="Add a UPI provider" className="inline-flex h-6 w-6 items-center justify-center rounded border border-line bg-pillgrey text-ink hover:bg-linestrong" onClick={() => setShowUpiMenu((v) => !v)}>
                         <Icon name="plus" size={12} />

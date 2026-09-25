@@ -41,9 +41,20 @@ export default function Toolbar({
 
         <div className="flex-1" />
 
-        {showCsv && <button type="button" className="btn" onClick={onExportCsv}><Icon name="file" size={14} /> Export to CSV</button>}
-        {showExcel && <button type="button" className="btn" onClick={onExportExcel}><Icon name="file" size={14} /> Export to Excel</button>}
-        {showPdf && <button type="button" className="btn" onClick={onExportPdf}><Icon name="file" size={14} /> Export to PDF</button>}
+        {/* Icon only, with the wording kept in title and aria-label.
+
+            All three used to draw the SAME "file" icon, which is fine beside a
+            label and useless without one - so each takes an icon that says
+            which format it is: a document for CSV, a grid for the spreadsheet,
+            and a printer for PDF, which is what that export actually does
+            (lib/format prints the table). */}
+        {/* Each export in the colour its format is known by - Excel green,
+            PDF red, CSV a neutral slate - so the three are told apart at a
+            glance now that they carry no words. The wording stays in title and
+            aria-label for the tooltip and for screen readers. */}
+        {showCsv && <button type="button" className="inline-flex h-9 w-10 items-center justify-center rounded bg-[#495464] text-white" title="Export to CSV" aria-label="Export to CSV" onClick={onExportCsv}><Icon name="file" size={16} /></button>}
+        {showExcel && <button type="button" className="inline-flex h-9 w-10 items-center justify-center rounded bg-[#1d6f42] text-white" title="Export to Excel" aria-label="Export to Excel" onClick={onExportExcel}><Icon name="grid" size={16} /></button>}
+        {showPdf && <button type="button" className="inline-flex h-9 w-10 items-center justify-center rounded bg-[#b30b00] text-white" title="Export to PDF" aria-label="Export to PDF" onClick={onExportPdf}><Icon name="printer" size={16} /></button>}
       </div>
 
       <div className="mt-3 flex flex-wrap items-center gap-2.5">

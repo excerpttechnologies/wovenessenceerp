@@ -120,9 +120,14 @@ select {
 
   /* ------------------------------------------------------------- table --- */
   .dt { @apply w-full border-collapse text-[12.5px] leading-[1.1]; }
+  /* Headings WRAP. They used to be whitespace-nowrap, so a two-word heading
+     like "Customer Name" or "Customer Contact" forced its column as wide as
+     the whole phrase, and the rows underneath had to wrap instead - a branch
+     name broke across two lines while its heading sat on one. Letting the
+     heading break puts the width back where the data needs it. */
   .dt th {
-    @apply whitespace-nowrap border-y border-r border-line bg-thead px-1.5 py-1
-           text-left font-bold text-ink last:border-r-0;
+    @apply border-y border-r border-line bg-thead px-1.5 py-1
+           text-left align-bottom font-bold leading-tight text-ink last:border-r-0;
   }
   .dt td { @apply border-b border-line px-1.5 py-1 text-cell align-middle; }
   .dt tbody tr:nth-child(odd) { @apply bg-rowalt; }
