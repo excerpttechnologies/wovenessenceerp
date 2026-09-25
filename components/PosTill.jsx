@@ -468,12 +468,28 @@ export default function PosTill() {
     return () => clearTimeout(timer);
   }, [business, customerSearch, customer]);
 
+  /* Item suggestions for the scan box.
+
+     THE CLEANUP HAS TO CANCEL THE ANSWER, NOT JUST THE TIMER. Clearing the
+     timeout alone left a request that had already gone out still running, and
+     its `.then` fired after the box had been emptied - so scanning an item
+     added the line, cleared the box, and then the dropdown reopened over an
+     empty search with the previous query's results still in it. `off` is
+     checked before every setState, which is the same guard the business /
+     location effect above uses. */
   useEffect(() => {
     const query = code.trim();
     if (!query || !business || !location) { setItemSuggestions([]); return undefined; }
-    const timer = setTimeout(() => fetch(`/api/inventory-barcode-list?perPage=10&business=${business}&location=${location}&search=${encodeURIComponent(query)}`)
-      .then((r) => r.json()).then((d) => setItemSuggestions(d.rows || [])).catch(() => setItemSuggestions([])), 250);
-    return () => clearTimeout(timer);
+
+    let off = false;
+    const timer = setTimeout(() => {
+      fetch(`/api/inventory-barcode-list?perPage=10&business=${business}&location=${location}&search=${encodeURIComponent(query)}`)
+        .then((r) => r.json())
+        .then((d) => { if (!off) setItemSuggestions(d.rows || []); })
+        .catch(() => { if (!off) setItemSuggestions([]); });
+    }, 250);
+
+    return () => { off = true; clearTimeout(timer); };
   }, [business, location, code]);
 
   function updateItem(index, key, value) {
@@ -497,6 +513,20 @@ export default function PosTill() {
     () => items.map((row) => row.barcodeNo).filter(Boolean),
     [items]
   );
+
+  /* The same list, but readable BEFORE React has re-rendered.
+
+     scannedCodes above is state-derived, and a scan is asynchronous: three
+     quick triggers of a scanner all start while `items` is still empty, all
+     send `scanned: []`, and the server's duplicate check has nothing to catch
+     them with - so one piece of stock lands on the bill three times.
+
+     This ref is appended the instant a line is accepted, so the second scan
+     sees the first. It is re-derived from `items` whenever they change, which
+     is what lets a removed row be scanned again and what clears it on Clear
+     Screen and after a sale. */
+  const scannedRef = useRef([]);
+  useEffect(() => { scannedRef.current = scannedCodes; }, [scannedCodes]);
 
   const addScanned = useCallback(async (raw) => {
     const query = String(raw || '').trim();
@@ -543,7 +573,7 @@ export default function PosTill() {
       return;
     }
 
-    const res = await lookupBarcode(query, scannedCodes);
+    const res = await lookupBarcode(query, scannedRef.current);
 
     if (res.ok) {
       addBarcodeUnit(res.unit);
@@ -626,6 +656,26 @@ export default function PosTill() {
      sale rather than to current till state - the sales person being the one
      that matters. */
   function addBarcodeUnit(unit, overrides = {}) {
+    /* Last gate before the row is pushed. The server refuses a repeat scan
+       too, but two scans that overlap can both pass it - see scannedRef.
+
+       The exchange RETURN leg is exempt, worked out exactly as setItems below
+       works out `isReturn`: the first line of an exchange is the piece coming
+       back, and it must be allowed on even if that barcode is somehow already
+       listed. Everything after it is an ordinary sale and is checked. */
+    const isReturnLeg = isExchange && !items.some((r) => r.isReturn);
+    const already = unit.barcodeNo
+      && !isReturnLeg
+      && scannedRef.current.some((b) => String(b) === String(unit.barcodeNo));
+    if (already) {
+      setMsg('Barcode ' + unit.barcodeNo + ' is already on this bill.');
+      beep('err');
+      setCode('');
+      setItemSuggestions([]);
+      return;
+    }
+    if (unit.barcodeNo) scannedRef.current = [...scannedRef.current, unit.barcodeNo];
+
     const product = {
       itemId: unit._id,
       barcodeNo: unit.barcodeNo,
