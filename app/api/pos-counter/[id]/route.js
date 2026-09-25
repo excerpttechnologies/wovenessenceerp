@@ -3,6 +3,11 @@ import PosCounter from '@/models/PosCounter';
 import { requireSession } from '@/lib/session';
 import { validate } from '@/lib/validate';
 import { FIELDS } from '@/app/admin/setting/poscounter/fields';
+import { screenDenial, SCREENS, ACTIONS as PERM } from '@/lib/screenPermission';
+
+/* The by-id route is the edit form, not the till's picker - the till reads
+   the list - so it answers to this master alone. */
+const POS_COUNTER = { screen: SCREENS.POS_COUNTER, label: 'cash counters' };
 
 /* /api/pos-counter/<id> - read one, update, delete. */
 
@@ -17,6 +22,14 @@ export async function GET(req, { params }) {
 
   const doc = await PosCounter.findById(id).lean();
   if (!doc) return json({ doc: null }, 404);
+
+  /* Scoped to the counter's own business, not to whichever business the
+     screen happens to be switched to. */
+  const denied = await screenDenial({
+    session, ...POS_COUNTER, action: PERM.READ, businessId: doc.businessId,
+  });
+  if (denied) return json({ error: denied.message, code: denied.code }, 403);
+
   return json({ doc: { ...doc, _id: String(doc._id) } });
 }
 
@@ -27,6 +40,16 @@ export async function PUT(req, { params }) {
   const { id } = await params;
   const body = await req.json();
   await dbConnect();
+
+  /* Before validate(), and scoped on the stored record rather than on the
+     body. */
+  const target = await PosCounter.findById(id).select('businessId').lean();
+  if (!target) return json({ error: 'Not found' }, 404);
+
+  const denied = await screenDenial({
+    session, ...POS_COUNTER, action: PERM.UPDATE, businessId: target.businessId,
+  });
+  if (denied) return json({ error: denied.message, code: denied.code }, 403);
 
   const { errors, doc, ok } = validate(FIELDS, body.data || {});
   if (!ok) return json({ errors }, 422);
@@ -43,6 +66,14 @@ export async function DELETE(req, { params }) {
 
   const { id } = await params;
   await dbConnect();
+
+  const target = await PosCounter.findById(id).select('businessId').lean();
+  if (!target) return json({ ok: true });
+
+  const denied = await screenDenial({
+    session, ...POS_COUNTER, action: PERM.DELETE, businessId: target.businessId,
+  });
+  if (denied) return json({ error: denied.message, code: denied.code }, 403);
 
   await PosCounter.findByIdAndDelete(id);
   return json({ ok: true });

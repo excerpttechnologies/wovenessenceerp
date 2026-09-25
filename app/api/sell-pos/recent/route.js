@@ -4,6 +4,9 @@ import PosInvoice from '@/models/PosInvoice';
 import { requireSession } from '@/lib/session';
 import { escapeRegex } from '@/lib/validate';
 import { barcodeCandidates, linesAnswering, lineBarcodeSpellings } from '@/lib/inventory';
+import { screenDenial, SCREENS, ACTIONS as PERM } from '@/lib/screenPermission';
+
+const POS = { screen: SCREENS.POS, label: 'POS bills' };
 
 /* /api/sell-pos/recent?code=<barcode|item code>&business=&location=
 
@@ -32,6 +35,20 @@ export async function GET(req) {
   if (!code) return json({ rows: [] });
 
   await dbConnect();
+
+  /* Read OR create, not read alone: this is the till's exchange lookup, used
+     while a sale is being rung up. A role allowed to bill but not to browse
+     the day's sales would otherwise be unable to take a return against the
+     bill it is allowed to raise. */
+  let gate = await screenDenial({
+    session, ...POS, action: PERM.READ, businessId: sp.get('business'),
+  });
+  if (gate) {
+    gate = await screenDenial({
+      session, ...POS, action: PERM.CREATE, businessId: sp.get('business'),
+    });
+  }
+  if (gate) return json({ error: gate.message, code: gate.code }, 403);
 
   const b = sp.get('business');
   const l = sp.get('location');

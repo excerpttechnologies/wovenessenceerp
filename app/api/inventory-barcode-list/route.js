@@ -4,6 +4,7 @@ import Grc from '@/models/Grc';
 import Grt from '@/models/Grt';
 import { BarcodeLabel } from '@/lib/barcodeLabel';
 import { requireSession } from '@/lib/session';
+import { screenDenialAny, ACTIONS as PERM, BARCODE_LIST_SCREENS } from '@/lib/screenPermission';
 import { escapeRegex } from '@/lib/validate';
 import { imageUrl } from '@/lib/inventory';
 import { barcodeSearchPattern } from '@/lib/barcodeValue';
@@ -28,6 +29,15 @@ export async function GET(req) {
 
   const business = sp.get('business');
   const location = sp.get('location');
+
+  /* Barcode Item read, or POS read - see BARCODE_LIST_SCREENS. Only
+     refuses when the role has a saved matrix withholding both.
+     lib/screenPermission.js. */
+  const denied = await screenDenialAny({
+    session, screens: BARCODE_LIST_SCREENS, action: PERM.READ,
+    businessId: sp.get('business'), label: 'barcode items',
+  });
+  if (denied) return json({ error: denied.message, code: denied.code }, 403);
 
   const filter = {};
   if (business && isValidObjectId(business)) filter.businessId = business;

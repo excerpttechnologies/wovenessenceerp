@@ -132,6 +132,9 @@ import { TABS } from '@/app/admin/contact/customer/tabs';
 
 import ContactType from '@/models/ContactType';
 import { nextContactId } from '@/lib/contactId';
+import { screenDenial, SCREENS, ACTIONS as PERM } from '@/lib/screenPermission';
+
+const CUSTOMER = { screen: SCREENS.CUSTOMER, label: 'customers' };
 
 const FIELDS = TABS.flatMap((t) => (t.sections || []).flatMap((s) => [
   ...(s.fields || []),
@@ -174,6 +177,13 @@ export async function GET(req) {
   const perPage = Math.min(500, Number(sp.get('perPage') || PER_PAGE));
   const search = (sp.get('search') || '').trim();
 
+  /* Only refuses when this role has a saved permission matrix that withholds
+     it - see lib/screenPermission.js. */
+  const denied = await screenDenial({
+    session, ...CUSTOMER, action: PERM.READ, businessId: sp.get('business'),
+  });
+  if (denied) return json({ error: denied.message, code: denied.code }, 403);
+
   const filter = {};
   const b = sp.get('business'); if (b && isValidObjectId(b)) filter.businessId = b;
   /* pinned server-side so the discriminator can't be spoofed */
@@ -211,6 +221,19 @@ export async function POST(req) {
   /* POS quick-add deliberately omits the full customer page's sales and
      ledger tabs. Keep that smaller contract explicit instead of making those
      fields optional for every customer submission. */
+  /* ALSO COVERS THE TILL'S QUICK-ADD (body.quick). Creating a customer is
+     creating a customer wherever the form lives, so the permission that
+     governs it is Customers > Create - a counter that should be able to add a
+     walk-in needs that ticked for its role. Gating quick-add on the POS screen
+     instead would give one question two answers.
+
+     Asked before the fields are validated: a request that is not allowed to
+     happen should be refused as not allowed. */
+  const denied = await screenDenial({
+    session, ...CUSTOMER, action: PERM.CREATE, businessId: body.business,
+  });
+  if (denied) return json({ error: denied.message, code: denied.code }, 403);
+
   const fields = body.quick ? QUICK_FIELDS : FIELDS;
   const quickData = body.quick
     ? { priceList: 'ON RSP', openingBalance: 0, ...(body.data || {}) }
@@ -221,7 +244,12 @@ export async function POST(req) {
 
   /* stamped here, never taken from the client */
   doc.contactKind = 'Customer';
-  doc.contactId = await nextContactId(Contact, ContactType, doc.typeId);
+  /* Two arguments, not three. nextContactId(ContactType, typeId) takes the
+     Contact Type model and the chosen type's id; the extra Contact model this
+     used to pass landed in the typeId slot, and a Mongoose model is a
+     function, so findById() read it as a callback and threw. Suppliers and
+     agents have always called it this way. */
+  doc.contactId = await nextContactId(ContactType, doc.typeId);
 
   const created = await Contact.create(doc);
   return json({

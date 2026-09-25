@@ -8,6 +8,9 @@ import { escapeRegex } from '@/lib/validate';
 import { BarcodeLabel } from '@/lib/barcodeLabel';
 import { imageUrl, barcodeCandidates, lineBarcodeSpellings } from '@/lib/inventory';
 import { barcodeKey } from '@/lib/barcodeValue';
+import { screenDenial, SCREENS, ACTIONS as PERM } from '@/lib/screenPermission';
+
+const POS_RETURN = { screen: SCREENS.POS_RETURN, label: 'POS returns' };
 
 /* GET /api/sell-pos-return/lookup?invoice=<no|id>&barcode=<no>&business=&location=
 
@@ -24,11 +27,25 @@ import { barcodeKey } from '@/lib/barcodeValue';
    on submit. */
 
 export const GET = handler(async (req) => {
-  await requirePermission(PERMISSIONS.POS_RETURN);
+  const session = await requirePermission(PERMISSIONS.POS_RETURN);
   const sp = new URL(req.url).searchParams;
   await dbConnect();
 
   const business = sp.get('business');
+
+  /* Create OR read, not read alone: this is the counter's own lookup, used
+     while a refund is being taken. A role allowed to process returns but not
+     to browse past ones would otherwise be unable to find the sale it is
+     allowed to refund against. */
+  let gate = await screenDenial({
+    session, ...POS_RETURN, action: PERM.READ, businessId: business,
+  });
+  if (gate) {
+    gate = await screenDenial({
+      session, ...POS_RETURN, action: PERM.CREATE, businessId: business,
+    });
+  }
+  if (gate) return json({ error: gate.message, code: gate.code }, 403);
   const invoiceRef = (sp.get('invoice') || '').trim();
   const barcode = (sp.get('barcode') || '').trim();
 

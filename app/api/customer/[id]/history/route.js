@@ -6,6 +6,10 @@ import PosReturn from '@/models/PosReturn';
 import { handler, json } from '@/lib/apiError';
 import { requireUser } from '@/lib/rbac';
 import { imageUrl } from '@/lib/inventory';
+import { screenDenial, SCREENS, ACTIONS as PERM } from '@/lib/screenPermission';
+
+const CUSTOMER = { screen: SCREENS.CUSTOMER, label: 'customers' };
+
 
 /* GET /api/customer/<id>/history?business=&limit=
 
@@ -21,7 +25,7 @@ import { imageUrl } from '@/lib/inventory';
 const DEFAULT_LIMIT = 20;
 
 export const GET = handler(async (req, { params }) => {
-  await requireUser();
+  const session = await requireUser();
   const { id } = await params;
   const sp = new URL(req.url).searchParams;
   await dbConnect();
@@ -34,6 +38,15 @@ export const GET = handler(async (req, { params }) => {
 
   const customer = await Customer.findById(id).lean();
   if (!customer) return json({ error: 'Customer not found.', code: 'NOT_FOUND' }, 404);
+
+  /* The same gate as the Customers list. This is a customer's buying history,
+     so a role that may not read customers must not be able to pull it here
+     instead. The till reads this endpoint, which is exactly why it needs
+     guarding rather than being left as the way round the list's permission. */
+  const denied = await screenDenial({
+    session, ...CUSTOMER, action: PERM.READ, businessId: business || customer.businessId,
+  });
+  if (denied) return json({ error: denied.message, code: denied.code }, 403);
 
   const [invoices, returns, totals] = await Promise.all([
     PosInvoice.find({ customerId: id, ...scope })

@@ -5,6 +5,17 @@ import { requireSession } from '@/lib/session';
 import { resolveRefLabels } from '@/lib/refLabels';
 import { validate, escapeRegex } from '@/lib/validate';
 import { FIELDS } from '@/app/admin/setting/poscounter/fields';
+import {
+  screenDenial, screenDenialAny, SCREENS, ACTIONS as PERM, COUNTER_PICKER_SCREENS,
+} from '@/lib/screenPermission';
+
+/* Permission gate for this screen.
+
+   READING THE LIST IS ALSO THE TILL'S COUNTER PICKER. PosTill.jsx fetches
+   this route directly rather than /api/options, so the list answers to POS
+   read as well as to this master - see COUNTER_PICKER_SCREENS. Writing a
+   counter still needs this screen's own permission. */
+const POS_COUNTER = { screen: SCREENS.POS_COUNTER, label: 'cash counters' };
 
 /* /api/pos-counter - list + create. */
 
@@ -21,6 +32,13 @@ export async function GET(req) {
   const page = Math.max(1, Number(sp.get('page') || 1));
   const perPage = Math.min(500, Number(sp.get('perPage') || PER_PAGE));
   const search = (sp.get('search') || '').trim();
+
+  /* This master, or the till that has to pick a counter. */
+  const denied = await screenDenialAny({
+    session, screens: COUNTER_PICKER_SCREENS, action: PERM.READ,
+    businessId: sp.get('business'), label: 'cash counters',
+  });
+  if (denied) return json({ error: denied.message, code: denied.code }, 403);
 
   const filter = {};
   const b = sp.get('business'); if (b && isValidObjectId(b)) filter.businessId = b;
@@ -57,6 +75,13 @@ export async function POST(req) {
 
   const body = await req.json();
   await dbConnect();
+
+  /* Ahead of validate(), and on this master alone - being allowed to work a
+     till is not being allowed to create one. */
+  const denied = await screenDenial({
+    session, ...POS_COUNTER, action: PERM.CREATE, businessId: body.business,
+  });
+  if (denied) return json({ error: denied.message, code: denied.code }, 403);
 
   const { errors, doc, ok } = validate(FIELDS, body.data || {});
   if (!ok) return json({ errors }, 422);

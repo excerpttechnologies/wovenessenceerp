@@ -2,6 +2,13 @@ import { isValidObjectId } from 'mongoose';
 import dbConnect from '@/lib/db';
 import PosHold from '@/models/PosHold';
 import { requireSession } from '@/lib/session';
+import { screenDenial, SCREENS, ACTIONS as PERM } from '@/lib/screenPermission';
+
+/* A PARKED BILL IS PART OF MAKING A SALE, not a document of its own, so it
+   answers to the POS screen rather than to one of its own. Parking needs
+   create - it is a sale in progress. Listing them accepts read OR create,
+   for the same reason the exchange lookup does. */
+const POS = { screen: SCREENS.POS, label: 'POS bills' };
 
 /* /api/pos-hold - list + create.
 
@@ -22,6 +29,16 @@ export async function GET(req) {
   const sp = new URL(req.url).searchParams;
   await dbConnect();
 
+  let gate = await screenDenial({
+    session, ...POS, action: PERM.READ, businessId: sp.get('business'),
+  });
+  if (gate) {
+    gate = await screenDenial({
+      session, ...POS, action: PERM.CREATE, businessId: sp.get('business'),
+    });
+  }
+  if (gate) return json({ error: gate.message, code: gate.code }, 403);
+
   const filter = {};
   const b = sp.get('business'); if (b && isValidObjectId(b)) filter.businessId = b;
   const l = sp.get('location'); if (l && isValidObjectId(l)) filter.locationId = l;
@@ -41,6 +58,13 @@ export async function POST(req) {
 
   const body = await req.json();
   await dbConnect();
+
+  /* Ahead of the empty-cart check, so a refused hold reads as 403 rather
+     than as a complaint about the cart. */
+  const denied = await screenDenial({
+    session, ...POS, action: PERM.CREATE, businessId: body.business,
+  });
+  if (denied) return json({ error: denied.message, code: denied.code }, 403);
 
   const data = body.data || {};
 

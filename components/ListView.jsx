@@ -1467,7 +1467,12 @@ import { fmt, toCsv, toXlsHtml, download, printTable } from "@/lib/format";
    off entirely. Fixed positioning escapes the clip; the rect is measured on
    open, and the menu flips to the left of the button when it would otherwise
    run off the right of the window. */
-function ActionMenu({ items, open, onToggle, onGo, onAction }) {
+function ActionMenu({ items, open, onToggle, onGo, onAction, emptyReason = '' }) {
+  /* Every entry can be filtered out by permissions, and a menu with nothing
+     in it opened as a thin empty strip under the button - which reads as a
+     broken dropdown rather than "you may not do anything here". Disable the
+     button instead and say why on hover. */
+  const empty = !items || items.length === 0;
   const btnRef = useRef(null);
   const [pos, setPos] = useState(null);
  
@@ -1489,13 +1494,16 @@ function ActionMenu({ items, open, onToggle, onGo, onAction }) {
       <button
         ref={btnRef}
         type="button"
-        className="h-[26px] cursor-pointer rounded border-0 bg-brand px-2.5 text-xs text-white"
-        onClick={onToggle}
+        className={"h-[26px] rounded border-0 bg-brand px-2.5 text-xs text-white "
+          + (empty ? "cursor-not-allowed opacity-50" : "cursor-pointer")}
+        onClick={empty ? undefined : onToggle}
+        disabled={empty}
+        title={empty ? emptyReason : undefined}
       >
         Action &#9662;
       </button>
  
-      {open && pos && (
+      {open && pos && !empty && (
         <span
           className="fixed z-50 block min-w-[190px] rounded-md border border-line bg-white py-1 shadow-pop"
           style={{ top: pos.top, left: pos.left }}
@@ -1528,7 +1536,21 @@ function ActionMenu({ items, open, onToggle, onGo, onAction }) {
  
 export default function ListView({ cfg, slug }) {
   const router = useRouter();
-  const { business, location, finYear, businessReady, locationReady } = useScope();
+  const { business, location, finYear, businessReady, locationReady, can } = useScope();
+
+  /* Which screen this list IS, for permission purposes. basePath + slugPath
+     is already the sidebar href the permission matrix is keyed by
+     ('/admin/contact/' + 'customer'), so nothing has to be declared twice;
+     cfg.screen overrides it for a list that lives somewhere else.
+
+     HIDING ONLY. The routes check every request for themselves - see
+     lib/screenPermission.js. can() answers true whenever it does not
+     positively know otherwise, so an ungoverned role, or a screen nobody has
+     wired, keeps every control exactly as it was. */
+  const screenKey = cfg.screen || ((cfg.basePath || '') + (cfg.slugPath || ''));
+  const mayCreate = can(screenKey, 'create');
+  const mayUpdate = can(screenKey, 'update');
+  const mayDelete = can(screenKey, 'delete');
   const [state, setState] = useState({
     rows: [],
     labels: {},
@@ -1929,6 +1951,8 @@ export default function ListView({ cfg, slug }) {
               return router.push(base + "/add");
             }}
             showAdd={cfg.showAdd !== false}
+            addDisabled={!mayCreate}
+            addDisabledReason="You do not have Create permission for this screen."
             showCsv={cfg.showCsv !== false}
             onExportCsv={() =>
               download(
@@ -2014,13 +2038,28 @@ export default function ListView({ cfg, slug }) {
                                   label: "Edit",
                                   icon: "pencil",
                                   to: (r) => base + "/" + r._id,
+                                  need: "update",
                                 },
                               ]
-                            ).map((m) => ({ 
+                            )
+                              /* An entry is dropped when the role may not do
+                                 it. `action: 'delete'` says so by itself;
+                                 anything else declares `need` in the cfg,
+                                 because a link's label is not something to
+                                 guess a permission from. */
+                              .filter((m) => {
+                                if (m.action === 'delete') return mayDelete;
+                                if (m.need === 'update') return mayUpdate;
+                                if (m.need === 'create') return mayCreate;
+                                if (m.need === 'delete') return mayDelete;
+                                return true;
+                              })
+                              .map((m) => ({ 
                               ...m, 
                               href: m.to ? m.to(row) : undefined,
                               rowId: row._id 
                             }))}
+                            emptyReason="You do not have permission for any action on this screen."
                             open={menuFor === row._id}
                             onToggle={() =>
                               setMenuFor((m) =>

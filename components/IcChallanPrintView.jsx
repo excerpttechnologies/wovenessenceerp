@@ -2,6 +2,7 @@
 import { useEffect, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import Icon from './Icon';
+import { uomTypeOf } from '@/lib/barcodeUnits';
 
 /* Printable Inter Company Delivery Challan.
 
@@ -16,10 +17,40 @@ import Icon from './Icon';
    Item Name / Description. Money is deliberately left off - a delivery
    challan moves goods, it is not the tax invoice.
 
+   THE FOOT TOTALS PER KIND OF UNIT, not overall: "Total Qty (Pc(s)) : 45"
+   and "Total Qty (Mtr.) : 5" on their own lines. A single figure added metres
+   to pieces, which is not a quantity of anything - 45 sarees and 5 metres of
+   cloth is not "50".
+
+   Grouped by uomTypeOf() rather than by the unit text, because the same
+   challan really does carry "Pc(s)" and "PC" on different lines - the unit is
+   free text on the item master. Totalling the raw strings printed pieces
+   twice, as two totals of 1 rather than one total of 2. uomTypeOf() is the
+   project's single definition of "is this pieces or metres" (lib/barcodeUnits.js,
+   pure so the browser can use it), and it is what the barcode engine and the
+   label printer already decide by.
+
    Everything is read from endpoints that already exist; nothing new on the
    server. */
 
 const qty = (v) => Number(v || 0).toFixed(2);
+
+/* Pieces and metres, each totalled once.
+
+   uomTypeOf() answers 'PC' or 'MTR' for whatever free text the item carries,
+   so "Pc(s)", "PC" and "Pcs" all land on the same line. It has no third
+   answer - anything it does not recognise as a length reads as pieces, which
+   is the same assumption the barcode engine makes when it plans labels. */
+const UOM_LABEL = { PC: 'Pc(s)', MTR: 'Mtr.' };
+
+function footTotals(lines) {
+  const out = {};
+  lines.forEach((l) => {
+    const key = UOM_LABEL[uomTypeOf(l.uom)] || 'Pc(s)';
+    out[key] = Math.round(((out[key] || 0) + (Number(l.qty) || 0) + Number.EPSILON) * 100) / 100;
+  });
+  return out;
+}
 const day = (v) => (v ? new Date(v).toLocaleDateString('en-GB') : '-');
 
 async function getJson(url) {
@@ -72,7 +103,7 @@ export default function IcChallanPrintView({ id }) {
 
   const { doc, from, to, fromLoc, toLoc, stockPoint } = data;
   const items = Array.isArray(doc.items) ? doc.items : [];
-  const totalQty = items.reduce((a, l) => a + (Number(l.qty) || 0), 0);
+  const perUom = footTotals(items);
 
   const addr = (b) => [b?.addressLine1, b?.addressLine2, b?.city].filter(Boolean).join(', ');
   const place = (b) => [b?.state, b?.zipCode].filter(Boolean).join(' - ');
@@ -162,20 +193,26 @@ export default function IcChallanPrintView({ id }) {
               ))}
             </tbody>
             <tfoot>
+              {/* One plain full-width row across the foot, read from the left -
+                  the totals are a statement about the consignment, not a
+                  value belonging under the Qty column. */}
               <tr>
-                <td colSpan={2} className="text-right font-bold">Total</td>
-                <td className="text-right font-bold">{qty(totalQty)}</td>
-                <td colSpan={3} />
+                <td colSpan={6} className="text-left font-bold">
+                  {Object.entries(perUom).map(([u, q]) => (
+                    <div key={u}>Total Qty ({u}) : {q}</div>
+                  ))}
+                  {!items.length && <div>Total Qty : 0</div>}
+                </td>
               </tr>
             </tfoot>
           </table>
 
           {/* -------------------------------------------------- signatures */}
-          <div className="grid grid-cols-2 px-3 pb-3 pt-12">
-            <div>Receiver&apos;s Signature</div>
+          <div className="flex justify-end  px-3 pb-10 pt-10">
+            {/* <div>Receiver&apos;s Signature</div> */}
             <div className="text-right">
               For {from?.businessPrintName || from?.name || ''}
-              <div className="pt-8">Authorised Signatory</div>
+              {/* <div className="pt-8">Authorised Signatory</div> */}
             </div>
           </div>
         </div>

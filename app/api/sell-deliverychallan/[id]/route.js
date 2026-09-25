@@ -1,8 +1,19 @@
+import { isValidObjectId } from 'mongoose';
 import dbConnect from '@/lib/db';
 import DeliveryChallan from '@/models/DeliveryChallan';
 import { requireSession } from '@/lib/session';
 import { validate } from '@/lib/validate';
 import { resolveRefLabels } from '@/lib/refLabels';
+import { screenDenial, SCREENS, ACTIONS as PERM } from '@/lib/screenPermission';
+
+/* Permission gate for this screen.
+
+   The Sales Invoice screen picks its source challans from this same list
+   (app/admin/transaction/sell/salesinvoice/form.js), so a role that may
+   raise a sales invoice needs Sell Delivery Challan read as well - which is
+   the right way round: you cannot invoice challans you may not see. */
+const SELL_DC = { screen: SCREENS.SELL_DELIVERY_CHALLAN, label: 'delivery challans' };
+
 import { FORM } from '@/app/admin/transaction/sell/deliverychallan/form';
 
 /* header fields AND the totals rows - the totals card holds real stored
@@ -33,6 +44,14 @@ export async function GET(req, { params }) {
   const doc = await DeliveryChallan.findById(id).lean();
   if (!doc) return json({ doc: null }, 404);
 
+  /* Scoped to the challan's own business, not to whichever business the
+     screen happens to be switched to. */
+  const denied = await screenDenial({
+    session, ...SELL_DC, action: PERM.READ, businessId: doc.businessId,
+  });
+  if (denied) return json({ error: denied.message, code: denied.code }, 403);
+
+
   /* The printed challan shows the customer, the location and the logistics
      provider by NAME; the document stores only their ids. The list route
      already resolves them this way - the detail route did not, so the print
@@ -50,6 +69,18 @@ export async function PUT(req, { params }) {
   const { id } = await params;
   const body = await req.json();
   await dbConnect();
+
+  /* Read first only to learn which business owns it, then decide permission
+     BEFORE validating. */
+  const current = isValidObjectId(id)
+    ? await DeliveryChallan.findById(id, { businessId: 1 }).lean()
+    : null;
+  if (!current) return json({ error: 'Not found' }, 404);
+
+  const denied = await screenDenial({
+    session, ...SELL_DC, action: PERM.UPDATE, businessId: body.business || current.businessId,
+  });
+  if (denied) return json({ error: denied.message, code: denied.code }, 403);
 
   const { errors, doc, ok } = validate(FIELDS, body.data || {});
   if (!ok) return json({ errors }, 422);
@@ -71,6 +102,18 @@ export async function DELETE(req, { params }) {
 
   const { id } = await params;
   await dbConnect();
+
+  /* Already gone is still a success, exactly as before - the guard only has
+     something to say when there is a record to protect. */
+  const existing = isValidObjectId(id)
+    ? await DeliveryChallan.findById(id, { businessId: 1 }).lean()
+    : null;
+  if (!existing) return json({ ok: true });
+
+  const denied = await screenDenial({
+    session, ...SELL_DC, action: PERM.DELETE, businessId: existing.businessId,
+  });
+  if (denied) return json({ error: denied.message, code: denied.code }, 403);
 
   await DeliveryChallan.findByIdAndDelete(id);
   return json({ ok: true });

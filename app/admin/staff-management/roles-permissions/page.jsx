@@ -4,7 +4,8 @@ import Icon from '@/components/Icon';
 import { useScope } from '@/components/ScopeContext';
 import {
   ROLES as BUILT_IN_ROLES, ACTIONS, RESOURCES, RESOURCE_GROUPS, DEFAULT_MATRIX,
-  isLockedRole, grantedCount, groupTally, resourceTitle, TOTAL_GRANTS, initialsOf,
+  isLockedRole, isOwnerRole, grantedCount, groupTally, resourceTitle, TOTAL_GRANTS,
+  initialsOf,
 } from './fields';
 
 /* Staff Management -> Roles & Permissions.
@@ -67,6 +68,11 @@ export default function RolesPermissionsPage() {
 
   const [matrix, setMatrix] = useState(DEFAULT_MATRIX);
   const [savedRoles, setSavedRoles] = useState([]);
+  /* The matrix as the SERVER last confirmed it, per role. Ticking a box only
+     changes `matrix`; until Save is pressed the database still holds this -
+     which is exactly the trap this screen used to set, because an unticked
+     box looked identical whether it had been saved or not. */
+  const [savedSnapshot, setSavedSnapshot] = useState({});
   const [loadingPerms, setLoadingPerms] = useState(false);
   const [busy, setBusy] = useState(false);
 
@@ -87,6 +93,12 @@ export default function RolesPermissionsPage() {
 
   const locked = isLockedRole(role);
 
+  /* Ticked something and not pressed Save yet? Compared against what the
+     server last confirmed, so it is true only when the two really differ. */
+  const dirty = !locked
+    && savedSnapshot[role] !== undefined
+    && savedSnapshot[role] !== JSON.stringify(toApi(matrix[role]));
+
   /* The five from the code plus whatever this business has created. The join
      happens here because this is the only screen that needs it - see
      models/Role.js for why the two are stored apart. */
@@ -101,6 +113,10 @@ export default function RolesPermissionsPage() {
       description: r.description || 'No description.',
     })),
   ], [customRoles]);
+
+  /* Everything this screen will show or offer. The owner role is filtered out
+     here once, so no picker below has to remember to exclude it. */
+  const roles = useMemo(() => allRoles.filter((r) => !isOwnerRole(r.k)), [allRoles]);
 
   /* ------------------------------------------------------------- load ---- */
 
@@ -142,6 +158,11 @@ export default function RolesPermissionsPage() {
       Object.entries(d.roles || {}).forEach(([k, saved]) => { merged[k] = fromApi(saved); });
       setMatrix(merged);
       setSavedRoles(Array.isArray(d.saved) ? d.saved : []);
+
+      /* What the server just told us, frozen for comparison. */
+      const snap = {};
+      Object.keys(merged).forEach((k) => { snap[k] = JSON.stringify(toApi(merged[k])); });
+      setSavedSnapshot(snap);
     } catch {
       setFlash({ type: 'err', msg: 'Could not load the saved permissions.' });
     } finally {
@@ -261,7 +282,8 @@ export default function RolesPermissionsPage() {
         return;
       }
       setSavedRoles((cur) => (cur.includes(role) ? cur : [...cur, role]));
-      setFlash({ type: 'ok', msg: 'Saved - ' + role + ' now holds ' + d.granted + ' permissions. Nothing enforces them yet.' });
+      setSavedSnapshot((cur) => ({ ...cur, [role]: JSON.stringify(toApi(matrix[role])) }));
+      setFlash({ type: 'ok', msg: 'Saved - ' + role + ' now holds ' + d.granted + ' permissions.' });
     } catch {
       setFlash({ type: 'err', msg: 'Could not save.' });
     } finally {
@@ -285,6 +307,9 @@ export default function RolesPermissionsPage() {
       }
       setMatrix((cur) => ({ ...cur, [role]: DEFAULT_MATRIX[role] || {} }));
       setSavedRoles((cur) => cur.filter((x) => x !== role));
+      setSavedSnapshot((cur) => ({
+        ...cur, [role]: JSON.stringify(toApi(DEFAULT_MATRIX[role] || {})),
+      }));
       setFlash({ type: 'ok', msg: role + ' is back to its default permissions.' });
     } catch {
       setFlash({ type: 'err', msg: 'Could not reset.' });
@@ -478,7 +503,15 @@ export default function RolesPermissionsPage() {
             key={key}
             type="button"
             className={'btn h-8 px-3 text-[12px] ' + (tab === key ? 'btn-primary' : '')}
-            onClick={() => { setTab(key); setFlash(null); }}
+            onClick={() => {
+              /* Leaving the Permissions tab with unsaved ticks is the other
+                 way to lose them without noticing. */
+              if (tab === 'permissions' && key !== 'permissions' && dirty
+                && !window.confirm('You have unsaved permission changes for ' + role
+                  + '. Leave this tab and lose them?')) return;
+              setTab(key);
+              setFlash(null);
+            }}
           >
             {text}
           </button>
@@ -540,14 +573,28 @@ export default function RolesPermissionsPage() {
                         </div>
                       </td>
                       <td>
-                        <select
-                          className="f-input h-7 w-[170px] text-[12px]"
-                          value={u.role || ''}
-                          disabled={busy}
-                          onChange={(e) => updateUser(u, { role: e.target.value })}
-                        >
-                          {allRoles.map((r) => <option key={r.k} value={r.k}>{r.label}</option>)}
-                        </select>
+                        {/* An account that already holds the owner role keeps it: the
+                            role is not in the list any more, so rendering a picker
+                            would either blank it or hand it away on the next
+                            change. Shown as a label instead. */}
+                        {isOwnerRole(u.role) ? (
+                          <span className={'pill ' + tone}>{u.role}</span>
+                        ) : (
+                          <select
+                            className="f-input h-7 w-[170px] text-[12px]"
+                            value={u.role || ''}
+                            disabled={busy}
+                            onChange={(e) => updateUser(u, { role: e.target.value })}
+                          >
+                            {/* A role that no longer exists - a deleted custom one -
+                                is still listed while this account holds it, so the
+                                picker cannot silently reassign somebody. */}
+                            {!roles.some((r) => r.k === u.role) && u.role && (
+                              <option value={u.role}>{u.role} (no longer defined)</option>
+                            )}
+                            {roles.map((r) => <option key={r.k} value={r.k}>{r.label}</option>)}
+                          </select>
+                        )}
                         <span className={'pill ' + tone + ' ml-2 align-middle'}>
                           {grantedCount(matrix, u.role)}
                         </span>
@@ -599,7 +646,8 @@ export default function RolesPermissionsPage() {
         <>
           <div className="mb-2 flex flex-wrap items-center gap-2">
             <span className="text-[12px] text-inkmuted">
-              {BUILT_IN_ROLES.length} built in, {customRoles.length} of your own
+              {BUILT_IN_ROLES.filter((r) => !r.owner).length} built in,{' '}
+              {customRoles.length} of your own
             </span>
             <span className="flex-1" />
             <button
@@ -626,7 +674,7 @@ export default function RolesPermissionsPage() {
               </tr>
             </thead>
             <tbody>
-              {allRoles.map((r, i) => {
+              {roles.map((r, i) => {
                 const n = grantedCount(matrix, r.k);
                 const pct = Math.round((n / TOTAL_GRANTS) * 100);
                 const customised = savedRoles.includes(r.k);
@@ -726,7 +774,7 @@ export default function RolesPermissionsPage() {
               value={role}
               onChange={(e) => { setRole(e.target.value); setFlash(null); }}
             >
-              {allRoles.map((r) => <option key={r.k} value={r.k}>{r.label}</option>)}
+              {roles.map((r) => <option key={r.k} value={r.k}>{r.label}</option>)}
             </select>
             <button
               type="button"
@@ -747,13 +795,26 @@ export default function RolesPermissionsPage() {
             </button>
             <button
               type="button"
-              className="btn btn-primary h-8 px-3 text-[12px]"
+              className={'btn h-8 px-3 text-[12px] '
+                + (dirty ? 'btn-primary ring-2 ring-warnyellow' : 'btn-primary')}
               disabled={locked || busy || !scope.business}
               onClick={save}
             >
-              {busy ? <span className="spin" /> : <Icon name="save" size={12} />} Save
+              {busy ? <span className="spin" /> : <Icon name="save" size={12} />}
+              {dirty ? ' Save changes' : ' Save'}
             </button>
           </div>
+
+          {/* An unticked box that has not been saved looks exactly like one
+              that has. Saying so is the difference between "this permission is
+              off" and "this permission is off on my screen only". */}
+          {dirty && (
+            <div className="mb-3 rounded border border-warnyellow bg-[#fffbe9] px-3 py-2 text-[13px]">
+              <b>Not saved yet.</b> These ticks are on screen only - {role} still has
+              whatever was last saved, and nothing changes for anyone until you press
+              <b> Save changes</b>.
+            </div>
+          )}
 
           {!groups.length && (
             <div className="dt-empty py-8 text-center">No screen matches that search.</div>
@@ -963,9 +1024,9 @@ export default function RolesPermissionsPage() {
                   value={invite.role}
                   onChange={(e) => setInvite((c) => ({ ...c, role: e.target.value }))}
                 >
-                  {allRoles.map((r) => <option key={r.k} value={r.k}>{r.label}</option>)}
+                  {roles.map((r) => <option key={r.k} value={r.k}>{r.label}</option>)}
                 </select>
-                <div className="f-hint">{allRoles.find((r) => r.k === invite.role)?.description}</div>
+                <div className="f-hint">{roles.find((r) => r.k === invite.role)?.description}</div>
               </div>
             </div>
 

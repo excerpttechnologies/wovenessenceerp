@@ -74,6 +74,9 @@ import Hsn from '@/models/Hsn';
 import Uom from '@/models/Uom';
 import Tax from '@/models/Tax';
 import { requireSession } from '@/lib/session';
+import {
+  screenDenialAny, ACTIONS as PERM, ITEM_LOOKUP_SCREENS,
+} from '@/lib/screenPermission';
 
 /* /api/item/<id>/detail
    Everything a Purchase Invoice line needs the moment an item is picked:
@@ -101,6 +104,16 @@ export async function GET(req, { params }) {
 
   const item = await Item.findById(id).lean();
   if (!item) return json({ error: 'Not found' }, 404);
+
+  /* Same rule as the list: Item read, or any screen that resolves item
+     codes. This is the shape the GRC grid, the till and Purchase Invoice
+     all read a picked item through, so gating it on Item alone would
+     break them. */
+  const denied = await screenDenialAny({
+    session, screens: ITEM_LOOKUP_SCREENS, action: PERM.READ,
+    businessId: item.businessId, label: 'items',
+  });
+  if (denied) return json({ error: denied.message, code: denied.code }, 403);
 
   const [hsn, uom] = await Promise.all([
     item.hsnId ? Hsn.findById(item.hsnId).lean() : null,

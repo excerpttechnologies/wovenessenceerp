@@ -29,14 +29,34 @@ export const ROLES = [
     label: 'Super Admin',
     tone: 'pill-red',
     locked: true,
+    /* THE OWNER OF THE INSTALLATION, not a role a customer administers.
+
+       `owner` keeps it out of this screen entirely - off the Roles tab and
+       out of both role pickers - so nobody can mint a second owner account
+       from here. It is still a real role that lib/rbac.js enforces, and the
+       accounts that hold it keep holding it; it simply is not on offer.
+       Granting or removing it is done on Masters > Users & Permissions, or
+       in the database. */
+    owner: true,
+    defaultsAll: true,
     description: 'Unrestricted. Works across every business and location.',
   },
   {
     k: 'Admin',
     label: 'Admin',
     tone: 'pill-red',
-    locked: true,
-    description: 'Unrestricted within the businesses the account is assigned to.',
+    /* Editable, unlike the owner role above.
+
+       Admin is the top role a CUSTOMER administers, so it has to be
+       narrowable - otherwise the only roles anybody can shape are the ones
+       below it. It still STARTS holding everything (defaultsAll), so nothing
+       changes until somebody deliberately takes a permission away.
+
+       It cannot lock itself out of this screen: /api/role-permission is gated
+       on ADMIN_ALL from lib/rbac.js, where Admin holds '*', and that is not
+       read from the saved matrix. The way back is always open. */
+    defaultsAll: true,
+    description: 'Everything by default, within the businesses the account is assigned to.',
   },
   {
     k: 'Location Manager',
@@ -58,9 +78,16 @@ export const ROLES = [
   },
 ];
 
-/* Super Admin and Admin hold '*' in lib/rbac.js, so their grid is not a set of
-   choices: every box is on and none of them is editable. */
+/* Only the owner role is uneditable. Being unrestricted BY DEFAULT and being
+   unchangeable are two different things, and Admin is the first: it opens
+   holding everything and can be narrowed from there. */
 export const isLockedRole = (role) => Boolean(ROLES.find((r) => r.k === role)?.locked);
+
+/* Roles whose default matrix is every box - see grantsFor below. */
+const startsWithEverything = (role) => Boolean(ROLES.find((r) => r.k === role)?.defaultsAll);
+
+/* The owner role, hidden from this screen - see the note on it above. */
+export const isOwnerRole = (role) => Boolean(ROLES.find((r) => r.k === role)?.owner);
 
 /* -------------------------------------------------------------- actions -- */
 
@@ -214,7 +241,7 @@ const RULES = {
 };
 
 function grantsFor(role, resource) {
-  if (isLockedRole(role)) return ALL;
+  if (startsWithEverything(role)) return ALL;
   const rule = RULES[role];
   if (!rule) return [];
   if (Object.prototype.hasOwnProperty.call(rule.resources || {}, resource.k)) {

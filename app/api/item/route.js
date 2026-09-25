@@ -6,6 +6,21 @@ import { requireSession } from '@/lib/session';
 import { resolveRefLabels } from '@/lib/refLabels';
 import { validate, escapeRegex } from '@/lib/validate';
 import { barcodeSearchPattern } from '@/lib/barcodeValue';
+import {
+  screenDenial, screenDenialAny, SCREENS, ACTIONS as PERM, ITEM_LOOKUP_SCREENS,
+} from '@/lib/screenPermission';
+
+/* Permission gate for this screen.
+
+   READING THE ITEM LIST answers to Item read OR to any screen that resolves
+   item codes - Print Label, Barcode Generation (reached from a GRC), GRT
+   scanning and the till. See ITEM_LOOKUP_SCREENS in lib/screenPermission.js.
+
+   Without that, gating Item read would stop a GRC operator scanning a code,
+   which has nothing to do with administering the Item master. Writing still
+   needs Item's own permission. */
+const ITEM = { screen: SCREENS.ITEM, label: 'items' };
+
 import { FIELDS } from '@/app/admin/inventory/item/fields';
 
 /* /api/item - list + create. */
@@ -23,6 +38,13 @@ export async function GET(req) {
   const page = Math.max(1, Number(sp.get('page') || 1));
   const perPage = Math.min(500, Number(sp.get('perPage') || PER_PAGE));
   const search = (sp.get('search') || '').trim();
+
+  /* Item read, or any screen that legitimately resolves item codes. */
+  const denied = await screenDenialAny({
+    session, screens: ITEM_LOOKUP_SCREENS, action: PERM.READ,
+    businessId: sp.get('business'), label: 'items',
+  });
+  if (denied) return json({ error: denied.message, code: denied.code }, 403);
 
   const filter = {};
   const barcodeImageByCode = {};
@@ -62,6 +84,11 @@ export async function POST(req) {
 
   const body = await req.json();
   await dbConnect();
+
+  const denied = await screenDenial({
+    session, ...ITEM, action: PERM.CREATE, businessId: body.business,
+  });
+  if (denied) return json({ error: denied.message, code: denied.code }, 403);
 
   const { errors, doc, ok } = validate(FIELDS, body.data || {});
   if (!ok) return json({ errors }, 422);

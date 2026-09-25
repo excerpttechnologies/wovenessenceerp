@@ -343,6 +343,16 @@ export default function BarcodeSettingsView() {
   const [adding, setAdding] = useState(false);
   const [editing, setEditing] = useState(null);
 
+  /* HIDING ONLY - the route checks every request for itself. can() answers
+     true whenever it does not positively know otherwise, so an ungoverned
+     role keeps this screen exactly as it was. This view is not built on
+     ListView, so its controls have to be wired by hand. */
+  const perms = useScope();
+  const SCREEN = '/admin/setting/barcodesetting';
+  const mayCreate = perms.can ? perms.can(SCREEN, 'create') : true;
+  const mayUpdate = perms.can ? perms.can(SCREEN, 'update') : true;
+  const mayDelete = perms.can ? perms.can(SCREEN, 'delete') : true;
+
   const load = useCallback(async () => {
     setLoading(true);
     const qs = new URLSearchParams({
@@ -415,6 +425,8 @@ export default function BarcodeSettingsView() {
             search={search}
             onSearch={setSearch}
             onAdd={() => setAdding(true)}
+            addDisabled={!mayCreate}
+            addDisabledReason="You do not have Create permission for this screen."
             onExportCsv={() =>
               download('barcodesetting.csv', toCsv(exportHeaders(), exportRows()), 'text/csv')
             }
@@ -452,20 +464,27 @@ export default function BarcodeSettingsView() {
                     {visible.map((c, i) => <td key={c.t + i}>{cell(row, c)}</td>)}
                     <td>
                       <span className="inline-flex items-center gap-1.5">
-                        <button
-                          className="act-btn bg-warnyellow"
-                          title="Edit"
-                          onClick={() => setEditing(row)}
-                        >
-                          <Icon name="pencil" size={12} />
-                        </button>
-                        <button
-                          className="act-btn bg-danger"
-                          title="Delete"
-                          onClick={() => remove(row._id)}
-                        >
-                          <Icon name="trash" size={12} />
-                        </button>
+                        {mayUpdate && (
+                          <button
+                            className="act-btn bg-warnyellow"
+                            title="Edit"
+                            onClick={() => setEditing(row)}
+                          >
+                            <Icon name="pencil" size={12} />
+                          </button>
+                        )}
+                        {mayDelete && (
+                          <button
+                            className="act-btn bg-danger"
+                            title="Delete"
+                            onClick={() => remove(row._id)}
+                          >
+                            <Icon name="trash" size={12} />
+                          </button>
+                        )}
+                        {!mayUpdate && !mayDelete && (
+                          <span className="text-[11px] text-inkmuted">View only</span>
+                        )}
                       </span>
                     </td>
                   </tr>

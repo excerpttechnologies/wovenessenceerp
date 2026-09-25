@@ -19,6 +19,17 @@ export default function VoucherSettingsView({ cfg, slug }) {
   const [flash, setFlash] = useState(null);
   const [saving, setSaving] = useState(false);
 
+  /* HIDING ONLY - the route checks every save for itself. can() answers true
+     whenever it does not positively know otherwise, so an ungoverned role
+     keeps the button exactly as it was. Update OR create, matching the rule
+     the route applies. */
+  const screenKey = (cfg.basePath || '') + (cfg.slugPath || slug || '');
+  const maySave = scope.can
+    ? (scope.can(screenKey, 'update') || scope.can(screenKey, 'create'))
+    : true;
+  const noSaveReason = 'You do not have Update permission for this screen.';
+
+
   useEffect(() => {
     if (!scope.business) return;
 
@@ -92,7 +103,14 @@ export default function VoucherSettingsView({ cfg, slug }) {
 
         <div className="rounded-md border border-line px-4 py-3 text-[12.5px] text-inkmuted">{spec.note}</div>
 
-        <button type="button" className="btn btn-primary mt-3 flex h-[38px] w-full justify-center" onClick={submit} disabled={saving}>
+        {!maySave && <div className="mt-3 text-[12px] text-danger">{noSaveReason}</div>}
+        <button
+          type="button"
+          className="btn btn-primary mt-3 flex h-[38px] w-full justify-center"
+          onClick={submit}
+          disabled={saving || !maySave}
+          title={!maySave ? noSaveReason : undefined}
+        >
           {saving ? <span className="spin" /> : <Icon name="save" size={14} />} Submit
         </button>
       </div>

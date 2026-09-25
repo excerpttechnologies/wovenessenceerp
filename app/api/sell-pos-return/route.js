@@ -8,6 +8,21 @@ import { escapeRegex } from '@/lib/validate';
 import { nextDocNumber } from '@/lib/docnumber';
 import { handler } from '@/lib/apiError';
 import { requirePermission, PERMISSIONS } from '@/lib/rbac';
+import { screenDenial, SCREENS, ACTIONS as PERM } from '@/lib/screenPermission';
+
+/* Permission gate for this screen.
+
+   The return counter lives at /admin/transaction/sell/pos-return/add - the
+   ADD screen of this list, so it answers to this screen's create.
+
+   DELIBERATELY NOT ALSO GATED ON POS. A return is taken against a sale, so
+   the screen has to show the parent bill; requiring POS read on top would
+   mean nobody could work the returns counter without also being given the
+   day's sales list. Taking returns and browsing sales are different jobs.
+
+   The older requirePermission(POS_RETURN) checks stay exactly where they
+   are. This layer only ever narrows, never widens. */
+const POS_RETURN = { screen: SCREENS.POS_RETURN, label: 'POS returns' };
 import {
   withTransaction, loadUnits, returnSoldUnits, barcodeCandidates, linesAnswering, lineBarcodeSpellings,
   unitsByCode, InventoryError, BARCODE_STATUS,
@@ -28,6 +43,13 @@ export async function GET(req) {
 
   const page = Math.max(1, Number(sp.get('page') || 1));
   const perPage = Math.min(500, Number(sp.get('perPage') || PER_PAGE));
+
+  /* Only refuses when this role has a saved permission matrix that
+     withholds it - see lib/screenPermission.js. */
+  const denied = await screenDenial({
+    session, ...POS_RETURN, action: PERM.READ, businessId: sp.get('business'),
+  });
+  if (denied) return json({ error: denied.message, code: denied.code }, 403);
 
   const filter = {};
   const b = sp.get('business'); if (b && isValidObjectId(b)) filter.businessId = b;
@@ -90,6 +112,13 @@ export const POST = handler(async (req) => {
   const data = body?.data || {};
   const session = await requirePermission(PERMISSIONS.POS_RETURN, { locationId: body.business ? data.locationId : null });
   await dbConnect();
+
+  /* Ahead of every field check below, so a refused refund comes back as 403
+     "not allowed" rather than 422 "pick an invoice first". */
+  const denied = await screenDenial({
+    session, ...POS_RETURN, action: PERM.CREATE, businessId: body.business,
+  });
+  if (denied) return json({ error: denied.message, code: denied.code }, 403);
 
   const businessId = isValidObjectId(body.business) ? body.business : null;
   const locationId = isValidObjectId(body.location) ? body.location : null;

@@ -7,6 +7,10 @@ import { validate, escapeRegex } from '@/lib/validate';
 import { handler } from '@/lib/apiError';
 import { requirePermission, PERMISSIONS } from '@/lib/rbac';
 import { withTransaction, adjustStock } from '@/lib/inventory';
+import { screenDenial, SCREENS, ACTIONS as PERM } from '@/lib/screenPermission';
+
+const STOCK_ADJUSTMENT = { screen: SCREENS.STOCK_ADJUSTMENT, label: 'stock adjustments' };
+
 import { FORM } from '@/app/admin/inventory/stock-adjustment/form';
 
 /* header fields AND the totals rows - the totals card holds real stored
@@ -38,6 +42,13 @@ export async function GET(req) {
   const page = Math.max(1, Number(sp.get('page') || 1));
   const perPage = Math.min(500, Number(sp.get('perPage') || PER_PAGE));
   const search = (sp.get('search') || '').trim();
+
+  /* Only refuses when this role has a saved permission matrix that
+     withholds it - see lib/screenPermission.js. */
+  const denied = await screenDenial({
+    session, ...STOCK_ADJUSTMENT, action: PERM.READ, businessId: sp.get('business'),
+  });
+  if (denied) return json({ error: denied.message, code: denied.code }, 403);
 
   const filter = {};
   const b = sp.get('business'); if (b && isValidObjectId(b)) filter.businessId = b;
@@ -71,6 +82,11 @@ export const POST = handler(async (req) => {
 
   const body = await req.json();
   await dbConnect();
+
+  const denied = await screenDenial({
+    session, ...STOCK_ADJUSTMENT, action: PERM.CREATE, businessId: body.business,
+  });
+  if (denied) return json({ error: denied.message, code: denied.code }, 403);
 
   const { errors, doc, ok } = validate(FIELDS, body.data || {});
   if (!ok) return json({ errors }, 422);

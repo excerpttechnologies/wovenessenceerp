@@ -4,6 +4,16 @@ import ProductGroup from '@/models/ProductGroup';
 import { requireSession } from '@/lib/session';
 import { resolveRefLabels } from '@/lib/refLabels';
 import { validate, escapeRegex } from '@/lib/validate';
+import { screenDenial, SCREENS, ACTIONS as PERM } from '@/lib/screenPermission';
+
+/* Permission gate for this screen.
+
+   THE LIST IS FULLY GATED. Barcode Generation only ever asks for ONE group by
+   id (components/GCRBarcodeGeneration.jsx), never for the list, so gating the
+   list costs it nothing. The by-id route keeps a second way in - see the note
+   there. */
+const PRODUCT_GROUP = { screen: SCREENS.PRODUCT_GROUP, label: 'product groups' };
+
 import { FIELDS } from '@/app/admin/inventory/product/group/fields';
 
 /* /api/product-group - list + create. */
@@ -21,6 +31,13 @@ export async function GET(req) {
   const page = Math.max(1, Number(sp.get('page') || 1));
   const perPage = Math.min(500, Number(sp.get('perPage') || PER_PAGE));
   const search = (sp.get('search') || '').trim();
+
+  /* Only refuses when this role has a saved permission matrix that
+     withholds it - see lib/screenPermission.js. */
+  const denied = await screenDenial({
+    session, ...PRODUCT_GROUP, action: PERM.READ, businessId: sp.get('business'),
+  });
+  if (denied) return json({ error: denied.message, code: denied.code }, 403);
 
   const filter = {};
   const b = sp.get('business'); if (b && isValidObjectId(b)) filter.businessId = b;
@@ -53,6 +70,11 @@ export async function POST(req) {
 
   const body = await req.json();
   await dbConnect();
+
+  const denied = await screenDenial({
+    session, ...PRODUCT_GROUP, action: PERM.CREATE, businessId: body.business,
+  });
+  if (denied) return json({ error: denied.message, code: denied.code }, 403);
 
   const { errors, doc, ok } = validate(FIELDS, body.data || {});
   if (!ok) return json({ errors }, 422);

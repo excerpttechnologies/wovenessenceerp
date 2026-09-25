@@ -12,6 +12,10 @@ import {
 
 import ContactType from '@/models/ContactType';
 import { nextContactId } from '@/lib/contactId';
+import { screenDenial, SCREENS, ACTIONS as PERM } from '@/lib/screenPermission';
+
+const SUPPLIER = { screen: SCREENS.SUPPLIER, label: 'suppliers' };
+
 
 const FIELDS = TABS.flatMap((t) => (t.sections || []).flatMap((s) => [
   ...(s.fields || []),
@@ -52,9 +56,30 @@ export async function GET(req) {
       const self = await Supplier.findById(excludeId, { businessId: 1 }).lean();
       if (self?.businessId) businessId = String(self.businessId);
     }
+    /* Read OR create, not read alone: this probe serves the ADD form as well
+       as the edit one, so a role allowed to create a supplier but not to
+       browse the list would otherwise be unable to fill the form it is
+       allowed to submit. */
+    let gate = await screenDenial({
+      session, ...SUPPLIER, action: PERM.READ, businessId,
+    });
+    if (gate) {
+      gate = await screenDenial({
+        session, ...SUPPLIER, action: PERM.CREATE, businessId,
+      });
+    }
+    if (gate) return json({ error: gate.message, code: gate.code }, 403);
+
     const conflict = await findSupplierGstConflict({ gstNo, businessId, excludeId });
     return json({ valid: true, gstNo, exists: Boolean(conflict), supplier: supplierSummary(conflict) });
   }
+
+  /* Only refuses when this role has a saved permission matrix that withholds
+     it - see lib/screenPermission.js. */
+  const denied = await screenDenial({
+    session, ...SUPPLIER, action: PERM.READ, businessId: sp.get('business'),
+  });
+  if (denied) return json({ error: denied.message, code: denied.code }, 403);
 
   const filter = {};
   const b = sp.get('business'); if (b && isValidObjectId(b)) filter.businessId = b;
@@ -89,6 +114,11 @@ export async function POST(req) {
 
   const body = await req.json();
   await dbConnect();
+
+  const denied = await screenDenial({
+    session, ...SUPPLIER, action: PERM.CREATE, businessId: body.business,
+  });
+  if (denied) return json({ error: denied.message, code: denied.code }, 403);
 
   const validationFields = body.allowBlankFirstName === true
     ? FIELDS.map((f) => (f.k === 'firstName' ? { ...f, req: false } : f))

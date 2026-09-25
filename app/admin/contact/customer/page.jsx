@@ -14,7 +14,7 @@ const CONFIG = {
   actionPosition: "left",
   actionVariant: "dropdown",
   actionMenu: [
-    { label: 'Edit', icon: 'pencil', to: (r) => '/admin/contact/customer/' + r._id },
+    { label: 'Edit', icon: 'pencil', need: 'update', to: (r) => '/admin/contact/customer/' + r._id },
     { label: 'Delete', icon: 'trash', action: 'delete' },
   ],
   columns: [

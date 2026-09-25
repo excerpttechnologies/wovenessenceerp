@@ -163,6 +163,14 @@ export default function FormView({ cfg, id, slug }) {
   const slugPath = cfg.slugPath || slug;
   const listUrl = (cfg.basePath || '/admin/setting/') + slugPath;
 
+  /* Same rule as ListView and TabbedFormView: editing needs update, a new
+     record needs create. The route refuses either way - this only stops the
+     operator filling in a form to be told no at the end. */
+  const maySave = scope.can ? scope.can(listUrl, id ? 'update' : 'create') : true;
+  const noSaveReason = id
+    ? 'You do not have Update permission for this screen.'
+    : 'You do not have Create permission for this screen.';
+
   useEffect(() => {
     if (!id) return;
     fetch(cfg.endpoint + '/' + id)
@@ -304,9 +312,16 @@ export default function FormView({ cfg, id, slug }) {
           </div>
         )}
 
-        <button type="button" className="btn btn-primary btn-submit" onClick={submit} disabled={saving}>
+        <button
+          type="button"
+          className="btn btn-primary btn-submit disabled:cursor-not-allowed disabled:opacity-50"
+          onClick={submit}
+          disabled={saving || !maySave}
+          title={!maySave ? noSaveReason : undefined}
+        >
           {saving ? <span className="spin" /> : <Icon name="save" size={14} />} Submit
         </button>
+        {!maySave && <span className="ml-2 text-[12px] text-danger">{noSaveReason}</span>}
       </div>
       </div>
     </>

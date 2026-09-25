@@ -4,6 +4,19 @@ import Transporter from '@/models/Transporter';
 import { requireSession } from '@/lib/session';
 import { validate, escapeRegex } from '@/lib/validate';
 import { FIELDS } from '@/app/admin/transport/transporter/fields';
+import { screenDenial, SCREENS, ACTIONS as PERM } from '@/lib/screenPermission';
+
+/* Permission gate for this screen.
+
+   THE DELIVERY (LR) SCREEN QUICK-ADDS A TRANSPORTER through this same POST
+   (components/DeliveryView.jsx), so raising an LR for a carrier that is not
+   on file needs Transport Master create. That is the right way round - a
+   quick-add writes a master record, and it should answer to the master's
+   own permission rather than smuggle one in through another screen.
+
+   Picking an EXISTING transporter on that form is unaffected: the dropdown
+   reads /api/options?ref=transporter, not this route. */
+const TRANSPORTER = { screen: SCREENS.TRANSPORTER, label: 'transporters' };
 
 /* /api/transporter - list + create. */
 
@@ -19,6 +32,13 @@ export async function GET(req) {
 
   const page = Math.max(1, Number(sp.get('page') || 1));
   const perPage = Math.min(500, Number(sp.get('perPage') || PER_PAGE));
+
+  /* Only refuses when this role has a saved permission matrix that
+     withholds it - see lib/screenPermission.js. */
+  const denied = await screenDenial({
+    session, ...TRANSPORTER, action: PERM.READ, businessId: sp.get('business'),
+  });
+  if (denied) return json({ error: denied.message, code: denied.code }, 403);
 
   const filter = {};
   const b = sp.get('business'); if (b && isValidObjectId(b)) filter.businessId = b;
@@ -52,6 +72,13 @@ export async function POST(req) {
 
   const body = await req.json();
   await dbConnect();
+
+  /* Ahead of validate(), so a refused transporter comes back as 403 "not
+     allowed" rather than 422 "your form is wrong". */
+  const denied = await screenDenial({
+    session, ...TRANSPORTER, action: PERM.CREATE, businessId: body.business,
+  });
+  if (denied) return json({ error: denied.message, code: denied.code }, 403);
 
   const { errors, doc, ok } = validate(FIELDS, body.data || {});
   if (!ok) return json({ errors }, 422);

@@ -59,6 +59,22 @@ import BarcodeSetting from '@/models/BarcodeSetting';
 import { requireSession } from '@/lib/session';
 import { validate, escapeRegex } from '@/lib/validate';
 import { ROW_FIELDS, sampleBarcode, rowName } from '@/app/admin/setting/barcodesetting/fields';
+import {
+  screenDenial, screenDenialAny, SCREENS, ACTIONS as PERM, BARCODE_SETTING_SCREENS,
+} from '@/lib/screenPermission';
+
+/* Permission gate for this screen.
+
+   READING THE LIST IS ALSO HOW LABELS GET GENERATED. The barcode
+   generation view (components/GCRBarcodeGeneration.jsx) pulls this list and
+   picks the newest row whose effective date has passed, and it is mounted
+   on the GRC barcode-generation and GRC print pages - so generating labels
+   would stop working if the list answered to this master alone. It answers
+   to GRC and Print Label too; see BARCODE_SETTING_SCREENS.
+
+   Writing needs this master's own permission: using the format in force is
+   not the same as defining it. */
+const BARCODE_SETTING = { screen: SCREENS.BARCODE_SETTING, label: 'barcode settings' };
 
 /* /api/barcode-setting - list + create.
 
@@ -86,6 +102,13 @@ export async function GET(req) {
 
   const page = Math.max(1, Number(sp.get('page') || 1));
   const perPage = Math.min(500, Number(sp.get('perPage') || PER_PAGE));
+
+  /* This master, or a screen that has to know which format is in force. */
+  const denied = await screenDenialAny({
+    session, screens: BARCODE_SETTING_SCREENS, action: PERM.READ,
+    businessId: sp.get('business'), label: 'barcode settings',
+  });
+  if (denied) return json({ error: denied.message, code: denied.code }, 403);
 
   const filter = scopeOf(sp);
 
@@ -123,6 +146,13 @@ export async function POST(req) {
 
   const body = await req.json();
   await dbConnect();
+
+  /* Ahead of every field check below, so a refused save reads as 403 "not
+     allowed" rather than as a complaint about the periods. */
+  const denied = await screenDenial({
+    session, ...BARCODE_SETTING, action: PERM.CREATE, businessId: body.business,
+  });
+  if (denied) return json({ error: denied.message, code: denied.code }, 403);
 
   const type = String(body.type || 'Periodic');
   const subType = String(body.subType || 'Monthly');

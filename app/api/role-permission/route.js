@@ -34,10 +34,13 @@ import { ACTIONS, RESOURCES } from '@/app/admin/staff-management/roles-permissio
    which derives them from config/nav.js. One list, so a permission can never
    be stored against a screen that does not exist. */
 
-/* Super Admin and Admin hold '*' in lib/rbac.js. They are not a set of
-   choices and must not be storable, or a saved document would start competing
-   with the code for what unrestricted means. */
-const LOCKED = [USER_ROLES.SUPER_ADMIN, USER_ROLES.ADMIN];
+/* The OWNER role only. Super Admin is the installation's owner and must stay
+   unrestricted, or a saved document could lock the last way in.
+
+   Admin is deliberately NOT here: it is the top role a customer administers
+   and has to be narrowable. It cannot lock itself out of this endpoint, which
+   is gated on ADMIN_ALL from lib/rbac.js rather than on the saved matrix. */
+const LOCKED = [USER_ROLES.SUPER_ADMIN];
 
 const BUILT_IN_ROLES = Object.values(USER_ROLES);
 const VALID_ACTIONS = new Set(ACTIONS.map((a) => a.k));

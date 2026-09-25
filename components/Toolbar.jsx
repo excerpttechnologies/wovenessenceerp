@@ -6,6 +6,13 @@ export default function Toolbar({
   columns, hidden, onToggleColumn, search, onSearch, onAdd, addLabel = 'ADD',
   onExportCsv, onExportExcel, onExportPdf, showAdd = true,
   showCsv = true, showExcel = true, showPdf = true,
+  /* ADD is DISABLED rather than removed when the role may not create here.
+
+     A button that vanishes leaves the operator wondering whether the screen
+     is broken or they are looking in the wrong place; one that is visibly
+     dead, with the reason beside it, tells them what to ask for. The server
+     refuses the request either way - see lib/screenPermission.js. */
+  addDisabled = false, addDisabledReason = '',
 }) {
   const [pop, setPop] = useState(false);
 
@@ -50,9 +57,18 @@ export default function Toolbar({
           />
         </span>
         {showAdd && (
-          <button type="button" className="btn btn-primary" onClick={onAdd}>
+          <button
+            type="button"
+            className="btn btn-primary disabled:cursor-not-allowed disabled:opacity-50"
+            onClick={onAdd}
+            disabled={addDisabled}
+            title={addDisabled ? addDisabledReason : undefined}
+          >
             <Icon name="plus" size={14} /> {addLabel}
           </button>
+        )}
+        {showAdd && addDisabled && addDisabledReason && (
+          <span className="text-[12px] text-danger">{addDisabledReason}</span>
         )}
       </div>
     </>

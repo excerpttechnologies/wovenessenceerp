@@ -10,6 +10,7 @@ import { nextDocNumber } from '@/lib/docnumber';
 import { BarcodeLabel, BARCODE_STATUS } from '@/lib/barcodeLabel';
 import { reserveBarcodeNumbers, loadFormat, uomTypeOf, batchTypeOf } from '@/lib/barcodeEngine';
 import { withTransaction, receiveIntoStock, restateReceipt, voidUnits, InventoryError } from '@/lib/inventory';
+import { screenDenialAny, ACTIONS as PERM, BARCODE_ROW_SCREENS } from '@/lib/screenPermission';
 import { matchRowsToUnits, editedFields, toGridRow, rowBarcode, unitBarcode, clientIdOf, pmfOf, PMF_REQUIRED_MESSAGE } from '@/lib/barcodeRowSync';
 import {
   BARCODE_SEPARATOR, composeBarcodeValue, barcodeValueProblem, billSlNoProblem, billSlNoForBarcode,
@@ -42,9 +43,20 @@ const PER_PAGE = 20;
 /* ================================================================= list === */
 
 export const GET = handler(async (req) => {
-  await requirePermission(null);
+  const session = await requirePermission(null);
   await dbConnect();
   const sp = new URL(req.url).searchParams;
+
+  /* The generated barcode rows. Answers to Print Label, GRC or GRT read -
+     this one list is what Print Label prints from AND what the GRT vendor
+     items picker chooses from, so gating it on Print Label alone would break
+     a Goods Return Note. Only refuses when the role has a saved matrix that
+     withholds all three. See lib/screenPermission.js. */
+  const denied = await screenDenialAny({
+    session, screens: BARCODE_ROW_SCREENS, action: PERM.READ,
+    businessId: sp.get('business'), label: 'barcode rows',
+  });
+  if (denied) return json({ error: denied.message, code: denied.code }, 403);
 
   const page = Math.max(1, Number(sp.get('page') || 1));
   const perPage = Math.min(1000, Number(sp.get('perPage') || PER_PAGE));

@@ -480,14 +480,14 @@ export const NAV = [
         href: '/admin/transaction/intercompanysell/deliverychallan' },
       { label: 'Receive Delivery Challan', icon: LuPackageCheck,
         href: '/admin/transaction/intercompanysell/receivedeliverychallan' },
-      { label: 'Sales Invoice', icon: LuFileText,
-        href: '/admin/transaction/intercompanysell/salesinvoice' },
-      { label: 'Auto Purchases Received', icon: LuPackageCheck,
-        href: '/admin/transaction/intercompanysell/auto-purchases-received' },
-      { label: 'Auto Purchases Return', icon: LuPackageMinus,
-        href: '/admin/transaction/intercompanysell/auto-purchases-return' },
-      { label: 'Sales Return', icon: LuUndo2,
-        href: '/admin/transaction/intercompanysell/salereturn' },
+      // { label: 'Sales Invoice', icon: LuFileText,
+      //   href: '/admin/transaction/intercompanysell/salesinvoice' },
+      // { label: 'Auto Purchases Received', icon: LuPackageCheck,
+      //   href: '/admin/transaction/intercompanysell/auto-purchases-received' },
+      // { label: 'Auto Purchases Return', icon: LuPackageMinus,
+      //   href: '/admin/transaction/intercompanysell/auto-purchases-return' },
+      // { label: 'Sales Return', icon: LuUndo2,
+      //   href: '/admin/transaction/intercompanysell/salereturn' },
     ],
   },
 
@@ -551,11 +551,11 @@ export const NAV = [
     label: 'Staff Management',
     icon: LuUsers,
     children: [
-      // {
-      //   label: 'Roles & Permissions',
-      //   icon: LuShieldCheck,
-      //   href: '/admin/staff-management/roles-permissions',
-      // },
+      {
+        label: 'Roles & Permissions',
+        icon: LuShieldCheck,
+        href: '/admin/staff-management/roles-permissions',
+      },
       /* Staffs still has no screen - kept commented rather than shipped as a
          dead link, the same call the E-commerce block's Orders and Coupons
          entries got. */

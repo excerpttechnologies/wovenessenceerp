@@ -16,6 +16,23 @@ import {
 import { barcodeKey, sameBarcode } from '@/lib/barcodeValue';
 import { handler } from '@/lib/apiError';
 import { requirePermission, PERMISSIONS } from '@/lib/rbac';
+import { screenDenial, SCREENS, ACTIONS as PERM } from '@/lib/screenPermission';
+
+/* Permission gate for this screen.
+
+   THE TILL ITSELF LIVES AT /admin/pos/add, not under this path, but it is
+   the ADD screen of this list - so it answers to this screen's create.
+
+   POS is also the fallback permission on three shared endpoints
+   (ITEM_LOOKUP_SCREENS and BARCODE_LIST_SCREENS in lib/screenPermission.js),
+   which answer to POS *read*. So a counter role needs read as well as
+   create: without read it could raise a sale but not look an item up to put
+   on it. Read is the ordinary grant for a till operator anyway - a cashier
+   who may not see the day's bills is not a configuration anyone asks for.
+
+   The older requirePermission(POS_SELL) check on POST stays exactly where it
+   was. This layer only ever narrows, never widens. */
+const POS = { screen: SCREENS.POS, label: 'POS bills' };
 const FIELDS = [];
 
 /* /api/sell-pos - list + create. */
@@ -32,6 +49,13 @@ export async function GET(req) {
 
   const page = Math.max(1, Number(sp.get('page') || 1));
   const perPage = Math.min(500, Number(sp.get('perPage') || PER_PAGE));
+
+  /* Only refuses when this role has a saved permission matrix that
+     withholds it - see lib/screenPermission.js. */
+  const denied = await screenDenial({
+    session, ...POS, action: PERM.READ, businessId: sp.get('business'),
+  });
+  if (denied) return json({ error: denied.message, code: denied.code }, 403);
 
   const filter = {};
   const b = sp.get('business'); if (b && isValidObjectId(b)) filter.businessId = b;
@@ -104,6 +128,13 @@ export const POST = handler(async (req) => {
 
   const body = await req.json();
   await dbConnect();
+
+  /* Ahead of validate(), so a refused sale comes back as 403 "not allowed"
+     rather than 422 "your cart is wrong". */
+  const denied = await screenDenial({
+    session, ...POS, action: PERM.CREATE, businessId: body.business,
+  });
+  if (denied) return json({ error: denied.message, code: denied.code }, 403);
 
   const { errors, doc, ok } = validate(FIELDS, body.data || {});
   if (!ok) return json({ errors }, 422);

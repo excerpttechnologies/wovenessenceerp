@@ -118,6 +118,13 @@ export function ScopeProvider({ children }) {
      change - the effect has not run yet - and a consumer reading it then
      fires a request with a location that no longer applies. Comparing against
      `business` is correct on that very first render. */
+  /* What this account's role may do, for hiding controls it cannot use.
+     `governed:false` (nobody has customised the role, or the request failed)
+     means show everything - the pre-permissions behaviour. The server checks
+     every request regardless, so a stale or missing answer here is a cosmetic
+     problem, never a security one. */
+  const [perms, setPerms] = useState({ governed: false, screens: {} });
+
   const [businessReady, setBusinessReady] = useState(false);
   const [locationsFor, setLocationsFor] = useState(null);
   const locationReady = locationsFor === business;
@@ -184,6 +191,18 @@ export function ScopeProvider({ children }) {
       .finally(() => setLocationsFor(business));
   }, [business]);
 
+  /* Re-read on every business change: permissions are stored per business,
+       so the same role can be allowed more in one branch than another. */
+  useEffect(() => {
+    if (!businessReady) return undefined;
+    let cancelled = false;
+    fetch('/api/my-permissions?business=' + (business || ''), { cache: 'no-store' })
+      .then((r) => (r.ok ? r.json() : { governed: false, screens: {} }))
+      .then((d) => { if (!cancelled) setPerms(d || { governed: false, screens: {} }); })
+      .catch(() => { if (!cancelled) setPerms({ governed: false, screens: {} }); });
+    return () => { cancelled = true; };
+  }, [business, businessReady]);
+
   useEffect(() => { if (business) localStorage.setItem(BUSINESS_KEY, business); }, [business]);
 
   /* Only once the list for THIS business has settled. On the render right
@@ -196,11 +215,26 @@ export function ScopeProvider({ children }) {
     }
   }, [business, location, locationsFor]);
 
+  /* May this account do `action` on `screen`?
+
+     Answers TRUE whenever it does not positively know otherwise - an
+     ungoverned role, a screen nobody has wired, a failed request. Hiding a
+     control the operator is actually allowed to use is the worse mistake:
+     the button going missing looks like a bug, while a button that turns out
+     to be refused at least explains itself. */
+  const can = (screen, action) => {
+    if (!perms.governed) return true;
+    if (!screen) return true;
+    const held = perms.screens?.[screen];
+    return Array.isArray(held) && held.includes(action);
+  };
+
   const value = {
     user,
     businesses, locations, business, location, finYear,
     businessReady, locationReady,
     setBusiness, setLocation, setFinYear,
+    perms, can,
     // appended to every list/save request
     query: () => new URLSearchParams({ business, location, finYear }).toString(),
   };

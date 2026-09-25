@@ -1,4 +1,9 @@
+import { isValidObjectId } from 'mongoose';
 import dbConnect from '@/lib/db';
+import { screenDenial, SCREENS, ACTIONS as PERM } from '@/lib/screenPermission';
+
+const STOCK_ADJUSTMENT = { screen: SCREENS.STOCK_ADJUSTMENT, label: 'stock adjustments' };
+
 import StockAdjustment from '@/models/StockAdjustment';
 import { requireSession } from '@/lib/session';
 import { validate } from '@/lib/validate';
@@ -31,6 +36,12 @@ export async function GET(req, { params }) {
 
   const doc = await StockAdjustment.findById(id).lean();
   if (!doc) return json({ doc: null }, 404);
+
+  const denied = await screenDenial({
+    session, ...STOCK_ADJUSTMENT, action: PERM.READ, businessId: doc.businessId,
+  });
+  if (denied) return json({ error: denied.message, code: denied.code }, 403);
+
   return json({ doc: { ...doc, _id: String(doc._id) } });
 }
 
@@ -41,6 +52,18 @@ export async function PUT(req, { params }) {
   const { id } = await params;
   const body = await req.json();
   await dbConnect();
+
+  /* Read first only to learn which business owns it, then decide
+     permission BEFORE validating. */
+  const current = isValidObjectId(id)
+    ? await StockAdjustment.findById(id, { businessId: 1 }).lean()
+    : null;
+  if (!current) return json({ error: 'Not found' }, 404);
+
+  const denied = await screenDenial({
+    session, ...STOCK_ADJUSTMENT, action: PERM.UPDATE, businessId: body.business || current.businessId,
+  });
+  if (denied) return json({ error: denied.message, code: denied.code }, 403);
 
   const { errors, doc, ok } = validate(FIELDS, body.data || {});
   if (!ok) return json({ errors }, 422);
@@ -60,6 +83,17 @@ export async function DELETE(req, { params }) {
 
   const { id } = await params;
   await dbConnect();
+
+  /* Already gone is still a success, exactly as before. */
+  const existing = isValidObjectId(id)
+    ? await StockAdjustment.findById(id, { businessId: 1 }).lean()
+    : null;
+  if (!existing) return json({ ok: true });
+
+  const denied = await screenDenial({
+    session, ...STOCK_ADJUSTMENT, action: PERM.DELETE, businessId: existing.businessId,
+  });
+  if (denied) return json({ error: denied.message, code: denied.code }, 403);
 
   await StockAdjustment.findByIdAndDelete(id);
   return json({ ok: true });

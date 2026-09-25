@@ -35,6 +35,16 @@ export default function PurchaseRateCodePage() {
   const [isActive, setIsActive] = useState(true);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
+
+  /* HIDING ONLY - the route checks every save for itself. can() answers
+     true whenever it does not positively know otherwise, so an ungoverned
+     role keeps the button exactly as it was. Update OR create, matching
+     the rule the route applies. */
+  const SCREEN = '/admin/setting/purchase-rate-code';
+  const maySave = scope.can
+    ? (scope.can(SCREEN, 'update') || scope.can(SCREEN, 'create'))
+    : true;
+  const noSaveReason = 'You do not have Update permission for this screen.';
   const [flash, setFlash] = useState(null);
   const [preview, setPreview] = useState('');
 
@@ -167,7 +177,8 @@ export default function PurchaseRateCodePage() {
               <button
                 type="button"
                 className="btn btn-primary"
-                disabled={saving || !ok}
+                disabled={saving || !ok || !maySave}
+                title={!maySave ? noSaveReason : undefined}
                 onClick={save}
               >
                 <Icon name="save" size={13} /> {saving ? 'Saving...' : 'Save Configuration'}

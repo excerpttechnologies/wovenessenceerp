@@ -638,6 +638,19 @@ export default function TabbedFormView({ cfg, id, slug, onSaved }) {
   const listUrl = (cfg.basePath || '/admin/contact/') + slugPath;
   const [active, setActive] = useState(0);
   const [recordId, setRecordId] = useState(id || null);
+
+  /* May this account save on this screen? Editing needs update, a new record
+     needs create. The route refuses either way (lib/screenPermission.js);
+     this only stops the operator filling in a long form to be told no at the
+     end. can() answers true unless it positively knows otherwise, so an
+     ungoverned role is unaffected. */
+  const maySave = scope.can
+    ? scope.can(listUrl, recordId ? 'update' : 'create')
+    : true;
+  const noSaveReason = recordId
+    ? 'You do not have Update permission for this screen.'
+    : 'You do not have Create permission for this screen.';
+
   const [errors, setErrors] = useState({});
   const [flash, setFlash] = useState(null);
   const [saving, setSaving] = useState(false);
@@ -887,6 +900,18 @@ export default function TabbedFormView({ cfg, id, slug, onSaved }) {
         setFlash({ type: 'err', msg: 'Please correct the highlighted fields.' });
         return;
       }
+
+      /* ANY other failure - 403 refused, 409 duplicate, 500 - is a failure.
+         Only 422 was handled above, so everything else fell through to
+         "Saved. Continue with the next tab." and the operator was told a
+         refused save had worked. It also ran setRecordId(d.id) with an
+         undefined id, which would have turned the next tab's PUT into a POST.
+         FormView has always got this right; this is the copy that drifted. */
+      if (!r.ok) {
+        setFlash({ type: 'err', msg: d.error || 'Could not save.' });
+        return;
+      }
+
       setRecordId(d.id);
       if (wizard || active === tabs.length - 1) {
         /* embedded in a dialog: hand the new record back rather than leaving
@@ -1047,9 +1072,13 @@ export default function TabbedFormView({ cfg, id, slug, onSaved }) {
                 <Icon name="back" size={14} /> Back
               </button>
             )}
+            {!maySave && (
+              <span className="text-[12px] text-danger">{noSaveReason}</span>
+            )}
             <span className="flex-1" />
             {isLastStep ? (
-              <button type="button" className="btn btn-primary flex h-[38px] min-w-[160px] justify-center" onClick={submit} disabled={saving || gstChecking || !!gstMatch}>
+              <button type="button" className="btn btn-primary flex h-[38px] min-w-[160px] justify-center" onClick={submit} disabled={saving || gstChecking || !!gstMatch || !maySave}
+                title={!maySave ? noSaveReason : undefined}>
                 {saving ? <span className="spin" /> : <Icon name="save" size={14} />} Submit
               </button>
             ) : (
@@ -1059,9 +1088,15 @@ export default function TabbedFormView({ cfg, id, slug, onSaved }) {
             )}
           </div>
         ) : (
-          <button type="button" className="btn btn-primary mt-2 flex h-[38px] w-full max-w-[390px] justify-center" onClick={submit} disabled={saving || gstChecking || !!gstMatch}>
-            {saving ? <span className="spin" /> : <Icon name="save" size={14} />} Submit
-          </button>
+          <>
+            <button type="button" className="btn btn-primary mt-2 flex h-[38px] w-full max-w-[390px] justify-center disabled:cursor-not-allowed disabled:opacity-50" onClick={submit} disabled={saving || gstChecking || !!gstMatch || !maySave}
+                  title={!maySave ? noSaveReason : undefined}>
+              {saving ? <span className="spin" /> : <Icon name="save" size={14} />} Submit
+            </button>
+            {!maySave && (
+              <div className="mt-1 text-[12px] text-danger">{noSaveReason}</div>
+            )}
+          </>
         )}
       </div>
       </div>
