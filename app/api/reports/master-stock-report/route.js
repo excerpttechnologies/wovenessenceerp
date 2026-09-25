@@ -117,8 +117,23 @@ export async function GET(req) {
       ],
     });
   }
-  const barcodeNo = s(sp.get('barcodeNo'));
-  if (barcodeNo) filter.barcodeNo = { $regex: escapeRegex(barcodeNo), $options: 'i' };
+  /* SEVERAL VALUES IN ONE BOX. The report's filter panel lets the operator
+     name more than one barcode, item or supplier; ReportView sends a list
+     comma-joined, and a single typed value is just a list of one. Blanks and
+     stray spaces are dropped so "9A1135, , 9A1136" behaves. */
+  const many = (key) => String(sp.get(key) || '')
+    .split(',')
+    .map((v) => v.trim())
+    .filter(Boolean);
+
+  /* Matched as "contains", the same as one value was, but against any of
+     them - so three barcodes return the three rows rather than none. */
+  const anyOf = (values) => ({
+    $in: values.map((v) => new RegExp(escapeRegex(v), 'i')),
+  });
+
+  const barcodeNos = many('barcodeNo');
+  if (barcodeNos.length) filter.barcodeNo = anyOf(barcodeNos);
   const hsn = s(sp.get('hsn'));
   if (hsn) filter.hsn = { $regex: escapeRegex(hsn), $options: 'i' };
   /* UOM: the picker is a ref, so it sends the Uom's _id (/api/options returns
@@ -159,23 +174,55 @@ export async function GET(req) {
       ? { $eq: [asNum('$gst'), gstNum] }
       : { $literal: false });
   }
-  const itemCode = s(sp.get('itemCode'));
-  if (itemCode) filter.itemCode = { $regex: escapeRegex(itemCode), $options: 'i' };
+  const itemCodes = many('itemCode');
+  if (itemCodes.length) filter.itemCode = anyOf(itemCodes);
+
+  /* ITEM NAME comes from the Item picker, so it arrives as ids. A stock row
+     may carry the item's id, its code or its name depending on which import
+     wrote it, so all three are accepted - the same shape the Group Name
+     filter below uses, and for the same reason. An id that reaches no stock
+     matches nothing rather than dropping the filter. */
+  /* itemPicks, not `itemIds` - that name is taken further down by the item
+     ids collected off the RESULT rows to label them. */
+  const itemPicks = many('itemId').filter((v) => isValidObjectId(v));
+  if (itemPicks.length) {
+    const pickedItems = await Item.find({ _id: { $in: itemPicks } })
+      .select('itemCode name').lean();
+    const itemKeysPicked = [...new Set(
+      pickedItems.flatMap((i) => [s(i.itemCode), s(i.name)]).filter(Boolean)
+    )];
+    ands.push({
+      $or: [
+        { itemId: { $in: pickedItems.map((i) => i._id) } },
+        ...(itemKeysPicked.length
+          ? [{ itemCode: { $in: itemKeysPicked } }, { itemName: { $in: itemKeysPicked } }]
+          : []),
+      ],
+    });
+  }
   /* SUPPLIER: the same vendor is keyed two ways on this collection - barcode
      generation stamps the contact's _id, the warehouse import stamps the
      vendor's own code ("G1000"). Of the supplier keys in stock today 66 are
      ids and 361 are codes, so accepting only the id the picker sends returned
      none of the imported stock. Both spellings of the chosen vendor are
      looked up, so one dropdown choice finds all of its units. */
-  const supplier = s(sp.get('supplierId'));
-  if (supplier) {
-    const keys = new Set([supplier]);
-    const vendor = isValidObjectId(supplier)
-      ? await Supplier.findById(supplier).select('contactId').lean()
-      : await Supplier.findOne({ contactId: supplier }).select('contactId').lean();
-    if (vendor) {
-      keys.add(String(vendor._id));
-      if (s(vendor.contactId)) keys.add(s(vendor.contactId));
+  /* supplierPicks, not `suppliers` - that name is already taken further down
+     by the vendor rows this report joins for its labels. */
+  const supplierPicks = many('supplierId');
+  if (supplierPicks.length) {
+    /* Every chosen vendor contributes BOTH of its spellings to one $in, so
+       picking three suppliers returns all of their stock however it was
+       keyed. */
+    const keys = new Set(supplierPicks);
+    for (const pick of supplierPicks) {
+      // eslint-disable-next-line no-await-in-loop
+      const vendor = isValidObjectId(pick)
+        ? await Supplier.findById(pick).select('contactId').lean()
+        : await Supplier.findOne({ contactId: pick }).select('contactId').lean();
+      if (vendor) {
+        keys.add(String(vendor._id));
+        if (s(vendor.contactId)) keys.add(s(vendor.contactId));
+      }
     }
     filter.supplierId = { $in: [...keys] };
   }

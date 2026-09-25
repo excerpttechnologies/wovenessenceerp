@@ -504,6 +504,12 @@ export const NAV = [
     children: [
       { label: 'Master Stock Report', icon: LuWarehouse,
         href: '/admin/report/master-stock-report' },
+      /* Sits with Master Stock Report rather than in the Reports list below,
+         because that is where it is reached from: every barcode number on the
+         Master Stock Report links straight into it. The href is unchanged, so
+         any permission already saved against it still applies. */
+      { label: 'Barcode Report', icon: LuBarcode,
+        href: '/admin/reports/barcode-report' },
     ],
   },
 
@@ -511,8 +517,6 @@ export const NAV = [
     label: 'Reports',
     icon: LuChartNoAxesColumn,
     children: [
-      { label: 'Barcode Report', icon: LuBarcode,
-        href: '/admin/reports/barcode-report' },
       { label: 'Receipt Voucher Report', icon: LuBadgeIndianRupee,
         href: '/admin/reports/receipt-voucher-report' },
       { label: 'Payment Voucher Report', icon: LuWalletCards,

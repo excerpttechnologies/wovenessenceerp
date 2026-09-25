@@ -103,6 +103,11 @@
 export const REPORT = {
   /* ReportView calls /api/reports/<slug> */
   slug: 'master-stock-report',
+
+  /* Every filter on screen, name left and input right, rather than the
+     default Add Filter panel: on this report the filters ARE the screen,
+     and hunting for one in a dropdown of twenty was the slow part. */
+  filterLayout: 'rows',
   title: 'Master Stock Report',
   subtitle: 'Every barcode currently in stock, with its item, supplier, age, quantity, valuation and printed prices.',
   perPage: 25,
@@ -117,11 +122,29 @@ export const REPORT = {
      must parse them as numbers and ignore blanks. */
   filters: [
    //  { k: 'search', label: 'Search', type: 'text', placeholder: 'Barcode, item, description or HSN' },
-    { k: 'barcodeNo', label: 'Barcode Number', type: 'text', placeholder: 'e.g. 9A1135' },
+    /* A chip per barcode - type one, press Enter, type the next. A picker
+       is no use here: there is one barcode per PIECE of stock, so the list
+       would run to thousands. The route matches a row answering ANY of
+       them. */
+    {
+      k: 'barcodeNo',
+      label: 'Barcode Number',
+      type: 'tags',
+      placeholder: 'Type barcode, press Enter',
+      /* offers matching numbers as they are typed - see
+         app/api/reports/barcode-suggest/route.js for why it is its own
+         route rather than the Barcode Item list. */
+      suggest: '/api/reports/barcode-suggest',
+    },
     { k: 'groupName', label: 'Group Name', type: 'text', placeholder: 'Group name' },
-    { k: 'itemCode', label: 'Item Name', type: 'text', placeholder: 'Item Name' },
+    /* Picked from the Item master, several at a time. The route resolves
+       each id back to the item's code AND name, because stock rows carry
+       whichever of the two the import that created them wrote - the same
+       reason the Group Name filter below matches on both. */
+    { k: 'itemId', label: 'Item Name', type: 'ref', ref: 'item', multi: true, all: 'Type to search' },
    //  { k: 'itemName', label: 'Item Name', type: 'text', placeholder: 'Item name' },
-    { k: 'supplierId', label: 'Supplier', type: 'ref', ref: 'supplier', all: 'All Suppliers' },
+    /* multi: the picker keeps a list, and ReportView sends it comma-joined. */
+    { k: 'supplierId', label: 'Supplier Name', type: 'ref', ref: 'supplier', multi: true, all: 'Type to search' },
     { k: 'hsn', label: 'HSN', type: 'text', placeholder: 'HSN code' },
     /* GST % is typed, not picked from the Tax master. That master
        (models/Tax.js, the ref: 'tax' option list) keys on its own _id and
@@ -166,7 +189,14 @@ export const REPORT = {
       { k: 'supplierName', t: 'Supplier Name' },
       { k: 'date', t: 'Date', f: 'date' },
       { k: 'age', t: 'Age' },
-      { k: 'barcodeNumber', t: 'BARCODE NUMBER' },
+      /* Opens that one barcode's own report - what it is, what it cost,
+         where it came from and every movement it has been part of. */
+      {
+        k: 'barcodeNumber',
+        t: 'BARCODE NUMBER',
+        link: (row) => '/admin/reports/barcode-report?barcodeNo='
+          + encodeURIComponent(row.barcodeNumber || ''),
+      },
       /* the only two columns that are additive: a quantity and a valuation.
          A per-unit price is not summed - totalling COST PRICE or RSP down a
          column would produce a number that means nothing. */

@@ -98,7 +98,123 @@ function RefFilter({ f, value, onChange }) {
   );
 }
 
-function Filter({ f, value, onChange }) {
+/* Several typed values, each kept as a chip.
+
+   Used where a picker is no use because the list would be enormous - barcode
+   numbers, of which there is one per piece of stock. Enter or a comma commits
+   what has been typed; Backspace on an empty box takes the last one back off.
+
+   The value is an ARRAY, which ReportView already sends comma-joined, so the
+   route reads it the same way it reads a multi-select. */
+function TagsFilter({ f, value, onChange, business }) {
+  const [term, setTerm] = useState('');
+  const [hits, setHits] = useState([]);
+  const [open, setOpen] = useState(false);
+  const chips = Array.isArray(value) ? value : (value ? [value] : []);
+
+  /* Suggestions, when the filter names an endpoint to ask.
+
+     Debounced, and the answer is discarded if the term has moved on - the
+     same guard the till's item box needed, and for the same reason: a slow
+     reply must not repopulate a list the operator has already typed past. */
+  useEffect(() => {
+    if (!f.suggest) return undefined;
+    const q = term.trim();
+    if (!q) { setHits([]); return undefined; }
+
+    let off = false;
+    const timer = setTimeout(() => {
+      const qs = new URLSearchParams({ q, business: business || '' });
+      fetch(f.suggest + '?' + qs, { cache: 'no-store' })
+        .then((r) => r.json())
+        .then((d) => { if (!off) { setHits(d.options || []); setOpen(true); } })
+        .catch(() => { if (!off) setHits([]); });
+    }, 250);
+
+    return () => { off = true; clearTimeout(timer); };
+  }, [f.suggest, term, business]);
+
+  const commit = (raw) => {
+    const parts = String(raw).split(',').map((v) => v.trim()).filter(Boolean);
+    if (!parts.length) return;
+    const next = [...chips];
+    parts.forEach((p) => { if (!next.some((c) => c.toLowerCase() === p.toLowerCase())) next.push(p); });
+    onChange(next);
+    setTerm('');
+  };
+
+  /* offered but not yet chosen - a barcode already on the list is not
+     suggested again */
+  const choices = hits.filter((h) => !chips.some((c) => c.toLowerCase() === String(h.value).toLowerCase()));
+
+  return (
+    <div className="relative">
+    <div className="f-input flex flex-wrap items-center gap-1 !h-auto min-h-[34px] py-1">
+      {chips.map((c) => (
+        <span key={c} className="inline-flex items-center gap-1 rounded bg-pillgrey px-1.5 py-0.5 text-[12px]">
+          {c}
+          <button
+            type="button"
+            aria-label={'Remove ' + c}
+            className="text-inkmuted hover:text-danger"
+            onClick={() => onChange(chips.filter((x) => x !== c))}
+          >
+            <Icon name="x" size={10} />
+          </button>
+        </span>
+      ))}
+      <input
+        className="min-w-[90px] flex-1 border-0 bg-transparent p-0 text-[13px] outline-none"
+        placeholder={chips.length ? '' : (f.placeholder || '')}
+        value={term}
+        onChange={(e) => {
+          const v = e.target.value;
+          if (v.includes(',')) commit(v);
+          else setTerm(v);
+        }}
+        onKeyDown={(e) => {
+          if (e.key === 'Enter') { e.preventDefault(); commit(term); }
+          if (e.key === 'Backspace' && !term && chips.length) onChange(chips.slice(0, -1));
+        }}
+        /* committed on blur too, so a value left in the box is not silently
+           dropped when the operator goes straight for Search */
+        /* Committed on blur, IMMEDIATELY.
+
+           This used to wait 150ms, which lost the last value typed: clicking
+           Search blurs the box, the search ran on the filters as they were,
+           and only afterwards did the delayed commit add the chip - so the
+           screen showed two barcodes and the results answered one.
+
+           The delay was there so a click on a suggestion would register
+           before the box committed, but the suggestion buttons already
+           preventDefault on mousedown, which stops the blur firing at all.
+           So nothing needs the wait. */
+        onBlur={() => { commit(term); setOpen(false); }}
+        onFocus={() => { if (choices.length) setOpen(true); }}
+      />
+    </div>
+
+    {open && choices.length > 0 && (
+      <div className="absolute left-0 right-0 top-full z-30 mt-1 max-h-56 overflow-auto rounded border border-line bg-white shadow-lg">
+        {choices.map((h) => (
+          <button
+            key={h.value}
+            type="button"
+            className="block w-full border-b border-line px-2 py-1.5 text-left text-[12.5px] last:border-b-0 hover:bg-[#f4f7fb]"
+            onMouseDown={(e) => e.preventDefault()}
+            onClick={() => { commit(h.value); setOpen(false); }}
+          >
+            {h.label || h.value}
+          </button>
+        ))}
+      </div>
+    )}
+    </div>
+  );
+}
+
+function Filter({ f, value, onChange, business }) {
+  if (f.type === 'tags') return <TagsFilter f={f} value={value} onChange={onChange} business={business} />;
   if (f.type === 'ref') return <RefFilter f={f} value={value} onChange={onChange} />;
 
   if (f.type === 'select') {
@@ -245,7 +361,18 @@ function Section({ section, data, tone }) {
                 <tr key={row._id || i}>
                   {columns.map((c) => (
                     <td key={c.t} className={isNumeric(c) ? 'text-right' : ''}>
-                      {c.f === 'image' ? <HoverImage src={row[c.k]} /> : cellOf(row, c)}
+                      {c.f === 'image'
+                        ? <HoverImage src={row[c.k]} />
+                        : c.link
+                          /* a column that names a destination renders as a
+                             link - used by Master Stock Report to open one
+                             barcode's own report. Blank cells stay plain, so
+                             a row with nothing to point at has nothing to
+                             click. */
+                          ? (cellOf(row, c)
+                            ? <a className="text-brand underline hover:opacity-80" href={c.link(row)}>{cellOf(row, c)}</a>
+                            : '')
+                          : cellOf(row, c)}
                     </td>
                   ))}
                 </tr>
@@ -463,29 +590,52 @@ export default function ReportView({ spec }) {
           {error && <div className="flash flash-err">{error}</div>}
           {!business && <div className="flash flash-err">Select a business in the top bar.</div>}
 
-          <div className="flex flex-wrap items-end gap-x-[18px] gap-y-3.5">
-            {(spec.filters || []).filter((f) => visible.has(f.k)).map((f) => (
-              <div key={f.k} className="w-full sm:w-[228px]">
-                <div className="mb-[5px] flex items-center justify-between">
-                  <label className="block text-[13px] text-ink">
+          {spec.filterLayout === 'rows' ? (
+            /* EVERY FILTER ON SCREEN, name on the left and its input on the
+               right. A report opts into this with filterLayout: 'rows' when its
+               filters are the point of the screen; the default stays the
+               "pick what you need" panel, which is what keeps the other
+               reports from opening as a wall of empty boxes.
+
+               No Add Filter button and no per-filter remove: nothing is hidden,
+               so there is nothing to add back or take away. */
+            <div className="grid grid-cols-1 gap-x-6 gap-y-2.5 md:grid-cols-2 xl:grid-cols-4">
+              {(spec.filters || []).map((f) => (
+                <div key={f.k} className="flex items-center gap-3">
+                  <label className="w-[104px] shrink-0 text-[12.5px] leading-tight text-ink">
                     {f.label}{f.req && <span className="f-req">*</span>}
                   </label>
-                  {!f.req && (
-                    <button
-                      type="button"
-                      className="text-[#9aa6ba] hover:text-danger"
-                      title={'Remove ' + f.label}
-                      onClick={() => removeFilter(f.k)}
-                    >
-                      <Icon name="x" size={12} />
-                    </button>
-                  )}
+                  <div className="min-w-0 flex-1">
+                    <Filter f={f} value={draft[f.k]} onChange={(v) => set(f.k, v)} business={business} />
+                  </div>
                 </div>
-                <Filter f={f} value={draft[f.k]} onChange={(v) => set(f.k, v)} />
-              </div>
-            ))}
-            <AddFilterMenu filters={spec.filters || []} visible={visible} onAdd={addFilter} />
-          </div>
+              ))}
+            </div>
+          ) : (
+            <div className="flex flex-wrap items-end gap-x-[18px] gap-y-3.5">
+              {(spec.filters || []).filter((f) => visible.has(f.k)).map((f) => (
+                <div key={f.k} className="w-full sm:w-[228px]">
+                  <div className="mb-[5px] flex items-center justify-between">
+                    <label className="block text-[13px] text-ink">
+                      {f.label}{f.req && <span className="f-req">*</span>}
+                    </label>
+                    {!f.req && (
+                      <button
+                        type="button"
+                        className="text-[#9aa6ba] hover:text-danger"
+                        title={'Remove ' + f.label}
+                        onClick={() => removeFilter(f.k)}
+                      >
+                        <Icon name="x" size={12} />
+                      </button>
+                    )}
+                  </div>
+                  <Filter f={f} value={draft[f.k]} onChange={(v) => set(f.k, v)} business={business} />
+                </div>
+              ))}
+              <AddFilterMenu filters={spec.filters || []} visible={visible} onAdd={addFilter} />
+            </div>
+          )}
 
           <div className="mt-4 flex items-center gap-2">
             {spec.hint && <span className="text-[12.5px] text-inkmuted">{spec.hint}</span>}
