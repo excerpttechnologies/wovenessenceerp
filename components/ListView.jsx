@@ -1918,6 +1918,20 @@ export default function ListView({ cfg, slug }) {
         />
       )}
  
+      {/* A SECOND LIST ABOVE THIS ONE, for a screen that wants the same
+          endpoint split into two sections - the Inter Company Delivery
+          Challan screen shows what the receiver has not approved yet above
+          what they have.
+
+          It sits HERE, below the summary boxes and the filter card, so the
+          screen keeps its familiar top: the boxes and the filter belong to
+          the whole screen, and a section slotted in above them would push
+          them into the middle of the page.
+
+          A plain node, rendered only when a screen passes one, so the other
+          55 lists that use this component are untouched. */}
+      {cfg.beforeTable || null}
+
       {modal && (
         <ModalForm
           cfg={cfg}

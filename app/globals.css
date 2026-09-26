@@ -166,6 +166,7 @@ select {
   .pill-grey { @apply bg-pillgrey text-[#5b6880]; }
   .pill-blue { @apply bg-[#e8f1fd] text-brand-link; }
   .pill-red { @apply bg-[#fdeaea] text-danger; }
+  .pill-yellow { @apply bg-[#fff3cd] text-warnyellow; }
 
   .act-btn {
     @apply inline-flex h-6 w-[26px] items-center justify-center rounded border-0

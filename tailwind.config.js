@@ -57,6 +57,17 @@ module.exports = {
     "./components/**/*.{js,jsx}",
     "./config/**/*.{js,jsx}",
   ],
+  /* PILL COLOURS ARE BUILT BY CONCATENATION, so the scanner never sees
+     them. ListView's `badges` column format renders
+     "pill pill-" + col.tone(value), and ReportView does the same - which
+     means the finished class name exists nowhere in the source and
+     Tailwind strips the rule out of @layer components as unused. The pill
+     then renders with no background at all.
+
+     pill-green and pill-red survive today only because a few screens
+     happen to write them out in full (roles-permissions/fields.js). This
+     list makes that reliable for every tone rather than accidental. */
+  safelist: ["pill-green", "pill-grey", "pill-blue", "pill-red", "pill-yellow"],
   theme: {
     extend: {
       colors: {

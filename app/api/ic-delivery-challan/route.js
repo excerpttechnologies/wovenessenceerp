@@ -12,7 +12,6 @@ import Business from '@/models/Business';
 import { reserveSequence } from '@/models/Counter';
 import { checkRoute } from '@/lib/icRouting';
 import { shipChallanStock, IcStockError } from '@/lib/icStock';
-import { receiveChallan, undoReceive } from '@/lib/icReceive';
 import { FIELDS, TOTAL_KEYS, computeTotals } from '@/app/admin/transaction/intercompanysell/deliverychallan/fields';
 
 /* /api/ic-delivery-challan - list + create. */
@@ -127,6 +126,22 @@ export async function GET(req) {
   if (from) filter.dcDate = { ...(filter.dcDate || {}), $gte: new Date(from) };
   if (to) filter.dcDate = { ...(filter.dcDate || {}), $lte: new Date(to + 'T23:59:59') };
 
+  /* WHICH HALF OF THE BOOK: waiting for the receiver, or accepted by them.
+
+     The Delivery Challan screen shows two sections and asks once for each.
+     receivedAt is stamped by lib/icReceive.js when somebody standing in the
+     DESTINATION branch approves the challan, so null is "still sitting there"
+     and a date is "landed".
+
+     $eq/$ne null both match a MISSING field as well as a null one, which
+     matters for challans written before receivedAt joined the schema.
+
+     Absent means no condition at all, so every other caller of this route -
+     the Sales Invoice picker, the print screens - is unaffected. */
+  const received = sp.get('received');
+  if (received === 'yes') filter.receivedAt = { $ne: null };
+  if (received === 'no') filter.receivedAt = { $eq: null };
+
   /* "unconverted" challans: no inter company sales invoice raised yet.
      $eq: null matches missing AND null - passing '' here would be cast
      against an ObjectId path and throw. */
@@ -140,6 +155,23 @@ export async function GET(req) {
   }
 
   const total = await IcDeliveryChallan.countDocuments(filter);
+
+  /* THE SUMMARY BOXES REPORT THE WHOLE BOOK, not the half in the table below
+     them. The two sections each ask with their own `received`, so honouring
+     that split here too would make Total DC No read 23 on a screen holding 25
+     challans - it would count the section the boxes happen to sit above.
+
+     Only the received condition is dropped. To Business, the dates and the
+     search are all still applied, so the boxes react to the filter exactly as
+     they did before there were two sections. With no `received` in the query
+     this is the same object as `filter`, so every other caller is unchanged.
+
+     `total` above is left alone - that one drives pagination, which must
+     count the rows actually being paged through. */
+  const { receivedAt: _receivedSplit, ...summaryFilter } = filter;
+  const summaryTotal = received
+    ? await IcDeliveryChallan.countDocuments(summaryFilter)
+    : total;
   const rows = await IcDeliveryChallan.find(filter)
     .sort({ createdAt: -1 })
     .skip((page - 1) * perPage)
@@ -159,7 +191,7 @@ export async function GET(req) {
      driver with no casting, so the same strings never match an ObjectId
      field. That is why the count was right while the quantity came back 0. */
   const idFields = ['businessId', 'locationId', 'toBusinessId', 'toLocationId'];
-  const matchIds = Object.fromEntries(Object.entries(filter).map(([k, v]) => (
+  const matchIds = Object.fromEntries(Object.entries(summaryFilter).map(([k, v]) => (
     idFields.includes(k) && typeof v === 'string' && isValidObjectId(v)
       ? [k, new Types.ObjectId(v)]
       : [k, v]
@@ -180,7 +212,7 @@ export async function GET(req) {
     rows: rows.map((r) => ({ ...r, _id: String(r._id) })),
     labels: await resolveRefLabels(rows),
     summary: {
-      count: total,
+      count: summaryTotal,
       totalQty: Math.round(((sums && sums.totalQty) || 0) * 100) / 100,
       netValue: Math.round(((sums && sums.netValue) || 0) * 100) / 100,
     },
@@ -252,35 +284,21 @@ export async function POST(req) {
     throw err;
   }
 
-  /* Land the goods at the destination in the same request.
+  /* THE GOODS ARE NOW IN TRANSIT, NOT RECEIVED.
 
-     There is no acceptance step. A branch-to-branch despatch inside one
-     company has no decision for the receiver to make, so a challan that has
-     been sent IS received - the "To Receive" queue it used to wait in only
-     held goods that had already left the sender, belonging to nobody until
-     somebody remembered to click.
+     Sending no longer lands them at the destination. The receiving branch
+     approves the challan on Inter Company Sell > Receive Delivery Challan,
+     and that approval is what creates the rows at the far end - see the
+     RECEIVE section of app/api/ic-receive-delivery-challan/route.js, which
+     calls the one definition of receiving in lib/icReceive.js.
 
-     The challan passed here carries the SHIPPED lines, not the submitted
-     ones: receiveChallanStock() reads line.stockMoves to know which of the
-     sender's rows each unit came off, and only the shipped lines have it.
+     The stock has still LEFT this branch: shipChallanStock above took the
+     quantity off the sender's barcode rows, so a piece promised to another
+     branch cannot also be sold here while the challan waits. `receivedAt`
+     stays null until the approval, which is exactly what the To Receive tab
+     lists.
 
-     A failure here means the goods have left the sender and not arrived, so
-     the whole despatch is undone - receiver rows deleted, quantity put back
-     on the sender's rows, challan removed - rather than left half-landed. */
-  try {
-    await receiveChallan({
-      challan: { ...created.toObject(), items: shipped },
-      user: session,
-    });
-  } catch (err) {
-    await undoReceive({
-      challan: { ...created.toObject(), items: shipped },
-      user: session,
-    });
-    await IcDeliveryChallan.deleteOne({ _id: created._id });
-    if (err instanceof IcStockError) return json({ error: err.message }, err.status);
-    throw err;
-  }
-
-  return json({ ok: true, id: String(created._id), dcNo: created.dcNo, received: true });
+     Nothing is rolled back here any more, because nothing is attempted here
+     any more - the despatch either shipped (above) or was undone there. */
+  return json({ ok: true, id: String(created._id), dcNo: created.dcNo, received: false });
 }

@@ -522,6 +522,7 @@ import Icon from './Icon';
 import Field from './Field';
 import MultiSelect from './MultiSelect';
 import { useScope } from './ScopeContext';
+import { useOptions } from './useOptions';
 import ProductImage from './ProductImage';
 import {
   FIELDS as DC_FIELDS, GRID_COLS, INFO, BLANK_ROW,
@@ -666,6 +667,45 @@ export default function IcChallanForm({ cfg, id }) {
       .catch(() => { if (!off) setLocations([]); });
     return () => { off = true; };
   }, [data.toBusinessId]);
+
+  /* STOCK POINT follows the top bar.
+
+     useOptions already asks /api/options?ref=stockpoint with the business and
+     location from the top bar, and that ref is locationScoped - so the list it
+     returns is precisely the stock points of the branch the operator is
+     standing in. Nearly always that is one, and being made to pick from a list
+     of one is a question with a single answer.
+
+     Two cases are handled:
+       nothing chosen yet          -> take the first
+       chosen, but not in the list -> replace it. This is the one that matters
+                                      when the top bar is switched mid-form:
+                                      the old branch's stock point would
+                                      otherwise stay selected and the challan
+                                      would be raised against a point that
+                                      belongs to another location.
+
+     A choice that IS valid for the current scope is never touched, so an
+     operator who picked the second of several keeps it.
+
+     Only ever applies to a form that declares the field - this component is
+     reused by the auto purchase return with its own spec, which has no stock
+     point and must not be given one. */
+  const stockPointOptions = useOptions(
+    'stockpoint',
+    '',
+    FIELDS.some((f) => f.k === 'stockPointId')
+  );
+
+  useEffect(() => {
+    const options = stockPointOptions.options || [];
+    if (!options.length) return;
+    setData((cur) => {
+      const chosen = String(cur.stockPointId || '');
+      if (chosen && options.some((o) => String(o.value) === chosen)) return cur;
+      return { ...cur, stockPointId: options[0].value };
+    });
+  }, [stockPointOptions.options]);
 
   /* GSTIN and address follow the chosen business */
   const pickBusiness = async (v) => {

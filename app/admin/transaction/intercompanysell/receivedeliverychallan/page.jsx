@@ -15,18 +15,21 @@ import { useScope } from '@/components/ScopeContext';
 
    Changing Business or Location in the top bar changes whose inbox this is.
 
-   There is no "To Receive" tab and no Receive button. Receipt is automatic:
-   /api/ic-delivery-challan lands the goods at the destination in the same
-   request that ships them, so a challan that has been sent is already here.
-   The queue that used to sit in front of this screen only held goods that had
-   already left the sender, belonging to nobody until somebody clicked.
+   RECEIPT IS AN APPROVAL, not an automatic consequence of sending. The
+   sending branch's despatch takes the goods off ITS stock and leaves them in
+   transit; nothing exists at this end until someone here approves the
+   challan. That is what the To Receive tab is for.
 
-   Two tabs:
+   Two tabs, and the first one holds both halves of the story:
 
-     Received  everything sent here - each line can be PART-returned from
-               here, for the damaged quantity only
-     Returns   what has come back on challans THIS branch sent, so the sender
-               sees damaged goods without a screen of their own
+     Received  challans WAITING for this branch to approve sit at the top,
+               each with an Approve button; approving one drops it into the
+               received list below. One screen, so the operator never has to
+               remember to look in a second place for work to do.
+               Each received line can be PART-returned from here, for the
+               damaged quantity only.
+     Returns   what has come back on challans THIS branch sent, so the
+               sender sees damaged goods without a screen of their own
 
    Receiving DOES move stock - it creates barcodeLabel rows under this branch,
    which is what lets it sell the goods. See lib/icReceive.js. */
@@ -45,6 +48,10 @@ export default function ReceiveDeliveryChallanPage() {
   const [detailRow, setDetailRow] = useState(null);
   const [busy, setBusy] = useState('');
   const [tab, setTab] = useState('received');
+  /* Challans addressed here that nobody has approved yet. Kept apart from
+     `rows` so they can be shown first and styled as work to do, rather
+     than mixed into the archive and sorted by date like everything else. */
+  const [pending, setPending] = useState([]);
   /* returnQty is keyed challanId|barcodeNo so two challans carrying the same
      barcode cannot share a box */
   const [returnQty, setReturnQty] = useState({});
@@ -52,23 +59,52 @@ export default function ReceiveDeliveryChallanPage() {
   const label = (id) => labels[String(id)] || '-';
 
   const load = useCallback(async () => {
-    if (!scope.business) { setRows([]); return; }
+    if (!scope.business) { setRows([]); setPending([]); return; }
     setLoading(true);
-    try {
+
+    /* The endpoint answers one state at a time - receivedAt is either null or
+       set, never both - so the Received tab asks twice and shows the two
+       groups together. Two small reads beat teaching the route a third
+       meaning of `received`. */
+    const ask = (view, received) => {
       const qs = new URLSearchParams({
         business: scope.business,
         location: scope.location || '',
         finYear: scope.finYear || '',
-        view: tab === 'returns' ? 'returns' : 'incoming',
-        received: tab === 'received' ? 'yes' : 'no',
+        view,
+        received,
         perPage: '100',
       });
-      const r = await fetch('/api/ic-receive-delivery-challan?' + qs, { cache: 'no-store' });
-      const d = await r.json();
-      setRows(Array.isArray(d.rows) ? d.rows : []);
-      setLabels(d.labels || {});
+      return fetch('/api/ic-receive-delivery-challan?' + qs, { cache: 'no-store' })
+        .then((r) => r.json());
+    };
+
+    try {
+      if (tab === 'returns') {
+        const d = await ask('returns', 'no');
+        setRows(Array.isArray(d.rows) ? d.rows : []);
+        setPending([]);
+        setLabels(d.labels || {});
+        return;
+      }
+
+      const [waiting, done] = await Promise.all([
+        ask('incoming', 'no'),
+        ask('incoming', 'yes'),
+      ]);
+      /* `awaiting` is what renderRow reads to colour the row, say
+         "Awaiting approval" and offer the Approve button. It is set here
+         rather than in the markup because it is a fact about WHICH LIST a
+         challan came from - the unapproved read - and the row itself carries
+         nothing that distinguishes it. */
+      setPending((Array.isArray(waiting.rows) ? waiting.rows : [])
+        .map((r) => ({ ...r, awaiting: true })));
+      setRows(Array.isArray(done.rows) ? done.rows : []);
+      /* both halves carry their own business and location names */
+      setLabels({ ...(waiting.labels || {}), ...(done.labels || {}) });
     } catch {
       setRows([]);
+      setPending([]);
       setFlash({ type: 'err', msg: 'Could not load incoming challans.' });
     } finally {
       setLoading(false);
@@ -76,6 +112,37 @@ export default function ReceiveDeliveryChallanPage() {
   }, [scope.business, scope.location, scope.finYear, tab]);
 
   useEffect(() => { load(); }, [load]);
+
+  /* Approve = receive. Posting without an `action` reaches the RECEIVE
+     branch of /api/ic-receive-delivery-challan, which calls the one
+     definition of receiving in lib/icReceive.js - the same helper the retry
+     path and the backfill script use, so the three cannot drift apart.
+
+     That endpoint is idempotent: a challan already approved answers 409
+     rather than landing the stock twice, which is what makes a double-click
+     harmless. */
+  async function approve(row) {
+    setBusy(row._id);
+    setFlash(null);
+    try {
+      const r = await fetch('/api/ic-receive-delivery-challan', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ id: row._id, business: scope.business }),
+      });
+      const d = await r.json();
+      if (!r.ok) {
+        setFlash({ type: 'err', msg: d.error || 'Could not approve that challan.' });
+        return;
+      }
+      setFlash({ type: 'ok', msg: 'Challan ' + (row.dcNo || '') + ' approved - the goods are now in this branch.' });
+      load();
+    } catch {
+      setFlash({ type: 'err', msg: 'Could not approve that challan.' });
+    } finally {
+      setBusy('');
+    }
+  }
 
   /* A confirmation is about the action just taken, so it should not sit on
      screen afterwards - it read as if every tab had just returned something.
@@ -132,6 +199,108 @@ export default function ReceiveDeliveryChallanPage() {
     }
   }
 
+  /* ONE ROW RENDERER, TWO TABLES.
+
+     The waiting challans and the approved ones are separate sections on
+     screen - the same shape Purchase > Goods Received uses for Pending and
+     Completed - but they are the same kind of row, so they are drawn by
+     one function. Two copies of this markup would drift the moment a
+     column changed. */
+  const renderRow = (row, i) => (
+      <tr key={row._id} className={row.awaiting ? 'bg-[#fff8e6]' : undefined}>
+                  <td className="text-center">{i + 1}</td>
+                  <td>
+                    {label(tab === 'returns' ? other(row).businessId : row.businessId)}
+                    {tab === 'returns' && (
+                      <div className={'text-[11px] ' + (weSent(row) ? 'text-danger' : 'text-inkmuted')}>
+                        {other(row).way}
+                      </div>
+                    )}
+                  </td>
+                  <td>{row.dcNo || '-'}</td>
+                  <td>{day(row.dcDate)}</td>
+                  <td>{label(tab === 'returns' ? other(row).locationId : row.locationId)}</td>
+                  <td className="whitespace-nowrap px-3 text-center">{money(row.totalQty)}</td>
+                  <td className="whitespace-nowrap px-3 text-center">{money(row.netValue)}</td>
+                  <td className="whitespace-nowrap">
+                    {tab === 'returns' ? (
+                      <span className="font-semibold text-danger">
+                        {(row.returns || []).reduce(
+                          (a, ev) => a + (ev.lines || []).reduce((n, l) => n + (Number(l.qty) || 0), 0), 0
+                        )}
+                      </span>
+                    ) : row.awaiting
+                      ? <span className="whitespace-nowrap text-[12px] font-semibold text-warnyellow">Awaiting approval</span>
+                      : day(row.receivedAt)}
+                  </td>
+                  <td>
+                    <span className="inline-flex items-center gap-1.5">
+                      <button
+                        type="button"
+                        className="act-btn bg-[#2b7fd4]"
+                        title="View"
+                        onClick={() => setDetailRow(row)}
+                      >
+                        <Icon name="eye" size={12} />
+                      </button>
+                      {/* Approve only where there is something to approve.
+                          Disabled while its own request is in flight, so a
+                          second click cannot start a second receipt. */}
+                      {row.awaiting && (
+                        <button
+                          type="button"
+                          className="act-btn bg-okgreen disabled:opacity-50"
+                          title={'Approve challan ' + (row.dcNo || '')}
+                          disabled={busy === row._id}
+                          onClick={() => approve(row)}
+                        >
+                          <Icon name="check" size={12} />
+                        </button>
+                      )}
+                    </span>
+                  </td>
+              </tr>
+  );
+
+  /* The table both sections use. `list` decides what is in it; awaiting
+     rows carry their own flag, set where the list is built. */
+  const grid = (list, emptyText) => (
+    <div className="overflow-x-auto">
+      <table className="dt">
+        <thead>
+          <tr>
+            <th>#</th>
+            <th>{tab === 'returns' ? 'Business' : 'From Business'}</th>
+            <th>DC No</th>
+            <th>DC Date</th>
+            <th>{tab === 'returns' ? 'Location' : 'From Location'}</th>
+            <th className="whitespace-nowrap text-center">Total Qty</th>
+            <th className="whitespace-nowrap text-center">Total Value</th>
+            <th className="whitespace-nowrap">
+              {tab === 'returns' ? 'Returned' : 'Received On'}
+            </th>
+            <th>Action</th>
+          </tr>
+        </thead>
+        <tbody>
+          {loading && <tr><td colSpan={9} className="dt-empty">Loading...</td></tr>}
+
+          {!loading && !scope.business && (
+            <tr><td colSpan={9} className="dt-empty">
+              Select a Business in the top bar to see what is addressed to it.
+            </td></tr>
+          )}
+
+          {!loading && scope.business && !list.length && (
+            <tr><td colSpan={9} className="dt-empty">{emptyText}</td></tr>
+          )}
+
+          {!loading && list.map(renderRow)}
+        </tbody>
+      </table>
+    </div>
+  );
+
   return (
     <div className="card p-4">
       <div className="mb-3 flex items-center border-b border-line pb-2">
@@ -166,80 +335,31 @@ export default function ReceiveDeliveryChallanPage() {
         ))}
       </div>
 
-      <div className="overflow-x-auto">
-        <table className="dt">
-          <thead>
-            <tr>
-              <th>#</th>
-              <th>{tab === 'returns' ? 'Business' : 'From Business'}</th>
-              <th>DC No</th>
-              <th>DC Date</th>
-              <th>{tab === 'returns' ? 'Location' : 'From Location'}</th>
-              <th className="whitespace-nowrap text-center">Total Qty</th>
-              <th className="whitespace-nowrap text-center">Total Value</th>
-              <th className="whitespace-nowrap">
-                {tab === 'returns' ? 'Returned' : 'Received On'}
-              </th>
-              <th>Action</th>
-            </tr>
-          </thead>
-          <tbody>
-            {loading && <tr><td colSpan={9} className="dt-empty">Loading...</td></tr>}
-
-            {!loading && !scope.business && (
-              <tr><td colSpan={9} className="dt-empty">
-                Select a Business in the top bar to see what is addressed to it.
-              </td></tr>
+      {/* WAITING FOR APPROVAL - its own section, above the list, so work to
+          do is never mixed in with work already done. Only on the Received
+          tab: a return is not something to approve. */}
+      {tab === 'received' && (
+        <div className="mb-5">
+          <div className="mb-2 flex items-center border-b border-line pb-2">
+            <span className="card-title">Pending Delivery Challans</span>
+            {pending.length > 0 && (
+              <span className="ml-2 rounded bg-[#fff3cd] px-2 py-0.5 text-[11.5px] font-semibold text-warnyellow">
+                {pending.length} awaiting approval
+              </span>
             )}
+          </div>
+          {grid(pending, 'Nothing waiting for approval.')}
+        </div>
+      )}
 
-            {!loading && scope.business && !rows.length && (
-              <tr><td colSpan={9} className="dt-empty">
-                {tab === 'returns'
-                  ? 'No returns involving this branch.'
-                  : 'Nothing received yet.'}
-              </td></tr>
-            )}
-
-            {!loading && rows.map((row, i) => (
-              <tr key={row._id}>
-                  <td className="text-center">{i + 1}</td>
-                  <td>
-                    {label(tab === 'returns' ? other(row).businessId : row.businessId)}
-                    {tab === 'returns' && (
-                      <div className={'text-[11px] ' + (weSent(row) ? 'text-danger' : 'text-inkmuted')}>
-                        {other(row).way}
-                      </div>
-                    )}
-                  </td>
-                  <td>{row.dcNo || '-'}</td>
-                  <td>{day(row.dcDate)}</td>
-                  <td>{label(tab === 'returns' ? other(row).locationId : row.locationId)}</td>
-                  <td className="whitespace-nowrap px-3 text-center">{money(row.totalQty)}</td>
-                  <td className="whitespace-nowrap px-3 text-center">{money(row.netValue)}</td>
-                  <td className="whitespace-nowrap">
-                    {tab === 'returns' ? (
-                      <span className="font-semibold text-danger">
-                        {(row.returns || []).reduce(
-                          (a, ev) => a + (ev.lines || []).reduce((n, l) => n + (Number(l.qty) || 0), 0), 0
-                        )}
-                      </span>
-                    ) : day(row.receivedAt)}
-                  </td>
-                  <td>
-                    <button
-                      type="button"
-                      className="act-btn bg-[#2b7fd4]"
-                      title="View"
-                      onClick={() => setDetailRow(row)}
-                    >
-                      <Icon name="eye" size={12} />
-                    </button>
-                  </td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
+      <div className="mb-2 flex items-center border-b border-line pb-2">
+        <span className="card-title">
+          {tab === 'returns' ? 'Returns' : 'Received Delivery Challans'}
+        </span>
       </div>
+      {grid(rows, tab === 'returns'
+        ? 'No returns involving this branch.'
+        : 'Nothing approved into this branch yet.')}
 
       {/* Challan detail.
 
@@ -304,8 +424,15 @@ export default function ReceiveDeliveryChallanPage() {
 
                   {/* Only what is left is returnable, so a line
                       cannot be returned twice over. A fully
-                      returned line has no box at all. */}
-                  {tab === 'received' && (
+                      returned line has no box at all.
+
+                      Keyed on the challan's own receivedAt, not on the tab:
+                      waiting challans now sit on the Received tab too, and
+                      nothing can be returned from goods that have not been
+                      approved into this branch yet - the API refuses it
+                      with "Receive the challan before returning anything
+                      from it." */}
+                  {tab === 'received' && detailRow.receivedAt && (
                     <td className="text-center">
                       {left > 0 ? (
                         <input
@@ -331,7 +458,8 @@ export default function ReceiveDeliveryChallanPage() {
           </tbody>
         </table>
 
-        {tab === 'received' && (detailRow.items || []).some((l) => leftToReturn(l) > 0) && (
+        {tab === 'received' && detailRow.receivedAt
+          && (detailRow.items || []).some((l) => leftToReturn(l) > 0) && (
           <div className="mt-2 flex items-center gap-3">
             <button
               type="button"
