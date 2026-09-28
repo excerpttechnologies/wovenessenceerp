@@ -2,7 +2,7 @@
 import { useEffect, useState } from 'react';
 import Sidebar from '@/components/Sidebar';
 import Topbar from '@/components/Topbar';
-import ChatBot from '@/components/ChatBot';
+import ChatBot, { ChatBotProvider } from '@/components/ChatBot';
 import { ScopeProvider } from '@/components/ScopeContext';
 import { disableSelectScroll } from '@/lib/disableSelectScroll';
 
@@ -17,6 +17,7 @@ export default function AdminLayout({ children }) {
 
   return (
     <ScopeProvider>
+     <ChatBotProvider>
       <div className="flex min-h-screen">
         <Sidebar collapsed={collapsed} />
         <div className={'min-w-0 flex-1 ' + (collapsed ? 'ml-0' : 'ml-sidebar')}>
@@ -29,6 +30,7 @@ export default function AdminLayout({ children }) {
           stays off the marketing landing page and /login. Mounted here rather
           than per-page so its transcript survives navigation between screens. */}
       <ChatBot />
+     </ChatBotProvider>
     </ScopeProvider>
   );
 }

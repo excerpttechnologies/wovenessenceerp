@@ -615,54 +615,43 @@ function makeMeterCutRows(count = 1, totalMtr = 0) {
   }));
 }
 
-function recalcMeterCutRows({ count, totalMtr, rows = [], changedIndex = null, changedValue = "" }) {
-  const safeCount = Math.max(1, Number(count || rows.length || 1));
-  const total = Number(totalMtr || 0);
-  const nextRows = Array.from({ length: safeCount }, (_, index) => {
-    const current = rows[index] || {};
-    const baseValue = current.value ?? "";
-    let value = baseValue;
-    if (index === changedIndex) value = changedValue;
-    return {
-      id: current.id ?? index + 1,
-      value: value === null || value === undefined ? "" : String(value),
-    };
-  });
+/* CUTS (MTR) - every box holds only what the operator typed into it.
 
-  if (changedIndex === null || !Number.isFinite(total) || total <= 0) {
-    return nextRows;
-  }
+   The balance (Total MTR less the cuts entered) is shown beside the boxes and
+   never written into one: this used to put the remaining metres into the
+   first blank cut on blur, so after 60 of 114 the next box already held 54
+   and had to be backspaced out before the real cut could be typed. */
 
-  if (nextRows[changedIndex]?.value === "") {
-    return nextRows;
-  }
+/* Metres actually entered - a blank or zero box is not a cut. */
+function sumCutRows(rows = []) {
+  return round2(rows.reduce((sum, row) => {
+    const value = Number(row?.value || 0);
+    return sum + (Number.isFinite(value) && value > 0 ? value : 0);
+  }, 0));
+}
 
-  let runningSum = 0;
-  let firstBlankIndex = -1;
+/* No. of Cuts changed or + pressed: the rows already there keep their values;
+   rows are added EMPTY, or dropped from the end. */
+function resizeCutRows(rows = [], count = 1) {
+  const safeCount = Math.max(1, Math.floor(Number(count)) || 1);
+  const next = rows.slice(0, safeCount);
+  let lastId = next.reduce((max, row) => Math.max(max, Number(row?.id) || 0), 0);
+  while (next.length < safeCount) next.push({ id: ++lastId, value: "" });
+  return next;
+}
 
-  for (let index = 0; index < safeCount; index += 1) {
-    const raw = nextRows[index]?.value;
-    const numeric = raw === "" || raw === null || raw === undefined ? null : Number(raw);
-    if (numeric !== null && Number.isFinite(numeric)) {
-      runningSum += numeric;
-      continue;
-    }
-
-    firstBlankIndex = index;
-    break;
-  }
-
-  if (firstBlankIndex === -1) {
-    return nextRows;
-  }
-
-  const remaining = Math.max(0, total - runningSum);
-  nextRows[firstBlankIndex] = { ...nextRows[firstBlankIndex], value: remaining > 0 ? String(remaining) : "" };
-  for (let index = firstBlankIndex + 1; index < safeCount; index += 1) {
-    nextRows[index] = { ...nextRows[index], value: "" };
-  }
-
-  return nextRows;
+/* An edit that would take the cuts past Total MTR is refused, and the message
+   names the metres still free for that box - the value is never trimmed to
+   fit. An edit that does not raise the total always stands, so cuts left over
+   the limit by a later change to Total MTR can still be worked back down.
+   Returns "" when the edit may stand; with no Total MTR there is no limit. */
+function cutEditError(rows, index, nextValue, totalMtr) {
+  const available = round2(Number(totalMtr || 0));
+  if (!Number.isFinite(available) || available <= 0) return "";
+  const nextTotal = sumCutRows(rows.map((row, rowIndex) => (rowIndex === index ? { ...row, value: nextValue } : row)));
+  if (nextTotal <= available || nextTotal <= sumCutRows(rows)) return "";
+  const balance = Math.max(0, round2(available - sumCutRows(rows.filter((_, rowIndex) => rowIndex !== index))));
+  return `Cut quantity cannot exceed the available balance of ${balance} MTR.`;
 }
 
 function emptyRow(id) {
@@ -779,8 +768,11 @@ function calculatePrices(row) {
    label  = what the user sees in the closed field
    onSearch(q) called as user types
    onSelect(optionObject) called on selection
-   onClear() called when × is clicked */
-function SearchSelect({ placeholder, value, label, onSearch, options, loading, onSelect, onClear, editableClass }) {
+   onClear() called when × is clicked
+   editableSelection - keep the picked value in a real text box (HSN): clicking
+     it edits that text character by character instead of opening an empty
+     search whose placeholder merely looks like the value. */
+function SearchSelect({ placeholder, value, label, onSearch, options, loading, onSelect, onClear, editableClass, editableSelection = false }) {
   const [open, setOpen] = useState(false);
   const [query, setQuery] = useState('');
   const [highlighted, setHighlighted] = useState(0);
@@ -807,10 +799,44 @@ function SearchSelect({ placeholder, value, label, onSearch, options, loading, o
   };
 
   const isSelected = Boolean(value);
+  const selectedText = String(label || value || '');
+  const openWithSelectedText = () => {
+    if (open) return;
+    setQuery(selectedText);
+    setOpen(true);
+    onSearch(selectedText);
+  };
 
   return (
     <div ref={containerRef} className="relative">
-      {isSelected && !open ? (
+      {editableSelection ? (
+        /* always an input: closed it shows the picked text, open it edits a
+           copy of that text. Focus seeds the copy with the same string, so the
+           caret the click placed stays where it landed. */
+        <div className={`flex items-center gap-1 rounded-md px-2 py-1.5 text-sm ${editableClass}`}>
+          <input
+            ref={inputRef}
+            className="flex-1 bg-transparent outline-none text-sm placeholder:text-gray-400"
+            placeholder={placeholder}
+            value={open ? query : selectedText}
+            onChange={(e) => { setQuery(e.target.value); onSearch(e.target.value); setOpen(true); }}
+            onFocus={openWithSelectedText}
+            /* still focused after a pick or Escape: a click reopens it */
+            onClick={openWithSelectedText}
+            onKeyDown={(e) => {
+              if (!open && (e.key === 'ArrowDown' || e.key === 'Enter')) { openWithSelectedText(); return; }
+              handleKey(e);
+            }}
+            autoComplete="off"
+          />
+          {loading
+            ? <span className="shrink-0 text-[11px] text-gray-400">…</span>
+            : isSelected
+              ? <button type="button" onMouseDown={(e) => e.preventDefault()} onClick={() => { onClear(); setQuery(''); setOpen(false); }}
+                  className="shrink-0 text-gray-400 hover:text-red-500" aria-label="Clear" tabIndex={-1}>✕</button>
+              : <span className="shrink-0 text-gray-400 text-[12px]">🔍</span>}
+        </div>
+      ) : isSelected && !open ? (
         /* closed + value: show label with clear button */
         <div className={`flex items-center gap-1 rounded-md px-2 py-2 text-sm ${editableClass}`}>
           <span className="flex-1 truncate">{label || value}</span>
@@ -1150,7 +1176,7 @@ function AddItemModal({ open, onClose, onSubmit, onSubmitAndPrint, barcodeFormat
   const hsn2TimerRef = useRef(null);
   const [cutRows, setCutRows] = useState([{ id: 1, value: "" }]);
   const [focusedCutIndex, setFocusedCutIndex] = useState(0);
-  const cutTargetRef = useRef(0);
+  const [cutError, setCutError] = useState("");
   /* Refs for each CUTS(MTR) input — used for Tab/Shift+Tab keyboard navigation
      so focus jumps directly to the next/prev input and never lands on the
      +/− buttons between rows. The array is rebuilt on every render; stale
@@ -1269,6 +1295,7 @@ function AddItemModal({ open, onClose, onSubmit, onSubmitAndPrint, barcodeFormat
       const count = Math.max(1, Number(form.noOfCuts || current.length || 1));
       return makeMeterCutRows(count, Number(form.totalMtr || 0));
     });
+    setCutError("");
 
     /* pre-populate dropdowns with initial results so they are not blank on open */
     searchItems('');
@@ -1393,6 +1420,7 @@ function AddItemModal({ open, onClose, onSubmit, onSubmitAndPrint, barcodeFormat
         onSelect={(opt) => handleHsnSelection(opt)}
         onClear={() => handleHsnSelection(null)}
         editableClass={editableClass}
+        editableSelection
       />
     </div>
   );
@@ -1414,6 +1442,7 @@ function AddItemModal({ open, onClose, onSubmit, onSubmitAndPrint, barcodeFormat
         onSelect={(opt) => handleHsn2Selection(opt)}
         onClear={() => handleHsn2Selection(null)}
         editableClass={editableClass}
+        editableSelection
       />
     </div>
   );
@@ -1929,44 +1958,32 @@ function AddItemModal({ open, onClose, onSubmit, onSubmitAndPrint, barcodeFormat
     });
   };
 
+  /* one EMPTY row on the end - the cuts already entered are kept as they are */
   const addCutRow = () => {
-    const currentCount = Number(form.noOfCuts || cutRows.length || 1);
-    const nextCount = Number.isFinite(currentCount) && currentCount > 0 ? currentCount + 1 : 1;
-    updateField("noOfCuts", String(nextCount));
-    setCutRows(makeMeterCutRows(nextCount, Number(form.totalMtr || 0)));
+    const next = resizeCutRows(cutRows, cutRows.length + 1);
+    setCutRows(next);
+    updateField("noOfCuts", String(next.length));
   };
 
   const removeCutRow = (index) => {
-    setCutRows((current) => {
-      if (current.length <= 1) return current;
-      const next = current.filter((_, rowIndex) => rowIndex !== index);
-      updateField("noOfCuts", String(next.length));
-      return next;
-    });
+    if (cutRows.length <= 1) return;
+    const next = cutRows.filter((_, rowIndex) => rowIndex !== index);
+    setCutRows(next);
+    updateField("noOfCuts", String(next.length));
+    setCutError("");
+    setFocusedCutIndex((focused) => (focused > index ? focused - 1 : Math.min(focused, next.length - 1)));
   };
 
-  const updateCutValue = (index, value) => {
-    const trimmed = value === "" ? "" : String(value);
-    const nextCuts = cutRows.map((row, rowIndex) => rowIndex === index ? { ...row, value: trimmed } : row);
-    setCutRows(nextCuts);
-    const enteredTotal = nextCuts.reduce((sum, row) => sum + (Number(row.value || 0) || 0), 0);
-    if (enteredTotal > cutTargetRef.current) cutTargetRef.current = enteredTotal;
-    updateField("totalMtr", enteredTotal ? String(enteredTotal) : "");
-  };
-
-  const commitCutValue = (index) => {
-    const countValue = form.noOfCuts === "" ? cutRows.length : form.noOfCuts;
-    const count = Number.isFinite(Number(countValue)) && Number(countValue) > 0 ? Number(countValue) : cutRows.length || 1;
-    const nextCuts = recalcMeterCutRows({
-      count,
-      totalMtr: cutTargetRef.current || Number(form.totalMtr || 0),
-      rows: cutRows,
-      changedIndex: index,
-      changedValue: cutRows[index]?.value || "",
-    });
-    setCutRows(nextCuts);
-    const committedTotal = nextCuts.reduce((sum, row) => sum + (Number(row.value || 0) || 0), 0);
-    updateField("totalMtr", committedTotal ? String(committedTotal) : "");
+  /* Writes this box and nothing else. Total MTR is the available length the
+     balance is worked from, so a cut no longer rewrites it either. Returns
+     what the box now holds - the previous value when the edit was refused. */
+  const updateCutValue = (index, raw) => {
+    const value = decimal2(raw);
+    const problem = cutEditError(cutRows, index, value, form.totalMtr);
+    setCutError(problem);
+    if (problem) return cutRows[index]?.value ?? "";
+    setCutRows((current) => current.map((row, rowIndex) => (rowIndex === index ? { ...row, value } : row)));
+    return value;
   };
 
   /* Barcode numbers are RESERVED FROM THE SERVER, not counted in the browser.
@@ -2051,6 +2068,26 @@ function AddItemModal({ open, onClose, onSubmit, onSubmitAndPrint, barcodeFormat
       setReserveError(priceProblem);
       return;
     }
+    /* MTR without Unique is one barcode for the whole length, so with no cut
+       typed it takes Total MTR - as it did when Total MTR was copied into
+       Cut 1. Only the plan reads it this way; no cut box is written. */
+    const planCutRows = form.isMtr && !form.uniqueBarcode && sumCutRows(cutRows) <= 0 && Number(form.totalMtr || 0) > 0
+      ? [{ id: 1, value: String(form.totalMtr) }]
+      : cutRows;
+    /* No cut is ever filled in for the operator, so an MTR entry with none
+       typed would make no barcode (Unique) or one of the wrong length. */
+    if (form.isMtr) {
+      const cutsTotal = sumCutRows(planCutRows);
+      const availableMtr = round2(Number(form.totalMtr || 0));
+      if (cutsTotal <= 0) {
+        setReserveError("Enter at least one cut length in CUTS (MTR).");
+        return;
+      }
+      if (availableMtr > 0 && cutsTotal > availableMtr) {
+        setReserveError(`Total cuts (${cutsTotal.toFixed(2)} MTR) exceed the available ${availableMtr.toFixed(2)} MTR. Reduce a cut or correct Total MTR.`);
+        return;
+      }
+    }
     if (reserving) return;                       // guards the double-click
 
     const generatedRows = [];
@@ -2062,7 +2099,7 @@ function AddItemModal({ open, onClose, onSubmit, onSubmitAndPrint, barcodeFormat
       uniqueBarcode: Boolean(form.uniqueBarcode),
       qtyOrCuts: form.isMtr ? (cutRows.length || Number(form.noOfCuts || 1)) : Number(form.qty || 1),
       totalMtr: Number(form.totalMtr || 0),
-      cutRows,
+      cutRows: planCutRows,
     });
 
     /* No number is reserved any more - the save route gives every barcode its
@@ -2094,7 +2131,8 @@ function AddItemModal({ open, onClose, onSubmit, onSubmitAndPrint, barcodeFormat
         gst: form.gst,
         uom: form.isMtr ? "MTR" : "PC",
         qty: String(planItem.qty || 0),
-        noOfCuts: form.isMtr ? String(cutRows.length || Number(form.noOfCuts || 1)) : "",
+        /* the cuts entered - a box left empty is not a cut and makes no barcode */
+        noOfCuts: form.isMtr ? String(planCutRows.filter((cut) => Number(cut.value || 0) > 0).length) : "",
         totalMtr: form.isMtr ? String(form.totalMtr || 0) : "",
         purchaseRate: String(purchaseRateValue),
         /* Encoded from the SAME value on the line above, so the two can never
@@ -2189,6 +2227,7 @@ function AddItemModal({ open, onClose, onSubmit, onSubmitAndPrint, barcodeFormat
       serialNo: nextSerial,
     }));
     setCutRows([{ id: 1, value: "" }]);
+    setCutError("");
     onClose();
   };
 
@@ -2374,13 +2413,12 @@ function AddItemModal({ open, onClose, onSubmit, onSubmitAndPrint, barcodeFormat
                 <input type="checkbox" checked={form.isMtr} onChange={(event) => {
                   const checked = event.target.checked;
                   updateField("isMtr", checked);
+                  setCutError("");
                   if (checked) {
                     const count = Math.max(1, Number(form.noOfCuts || 1));
                     updateField("noOfCuts", String(count));
-                    cutTargetRef.current = Number(form.totalMtr || 0);
                     setCutRows(makeMeterCutRows(count, Number(form.totalMtr || 0)));
                   } else {
-                    cutTargetRef.current = 0;
                     setFocusedCutIndex(0);
                     setCutRows([{ id: 1, value: "" }]);
                   }
@@ -2430,24 +2468,13 @@ function AddItemModal({ open, onClose, onSubmit, onSubmitAndPrint, barcodeFormat
                     const raw = event.target.value;
                     updateField("noOfCuts", raw);
 
-                    if (raw === "") {
-                      setCutRows((current) => Array.from({ length: Math.max(1, current.length || 1) }, (_, index) => ({
-                        id: current[index]?.id ?? index + 1,
-                        value: "",
-                      })));
-                      return;
-                    }
-
+                    /* blank or not a count yet (mid-edit): the rows and the cuts
+                       in them stay exactly as they are */
                     const count = Number(raw);
-                    if (!Number.isFinite(count) || count <= 0) {
-                      setCutRows((current) => Array.from({ length: Math.max(1, current.length || 1) }, (_, index) => ({
-                        id: current[index]?.id ?? index + 1,
-                        value: "",
-                      })));
-                      return;
-                    }
+                    if (raw === "" || !Number.isFinite(count) || count <= 0) return;
 
-                    setCutRows(makeMeterCutRows(count, Number(form.totalMtr || 0)));
+                    setCutError("");
+                    setCutRows((current) => resizeCutRows(current, count));
                   }} className={`w-full rounded-md px-2 py-2 text-sm ${editableClass}`} />
                 ) : (
                   <input type="text" inputMode="decimal" value={form.qty} onWheel={(e) => e.currentTarget.blur()} onChange={(event) => updateField("qty", decimal2(event.target.value))} className={`w-full rounded-md px-2 py-2 text-sm ${editableClass}`} />
@@ -2457,29 +2484,11 @@ function AddItemModal({ open, onClose, onSubmit, onSubmitAndPrint, barcodeFormat
               {form.isMtr && (
                 <div className="space-y-1">
                   <label className="block text-[11px] font-semibold text-gray-700">Total MTR *</label>
+                  {/* the available length the CUTS (MTR) balance is worked from -
+                      it no longer writes itself into Cut 1, nor clears the cuts */}
                   <input type="number" min={0} step="0.01" value={form.totalMtr} onWheel={(e) => e.currentTarget.blur()} onChange={(event) => {
-                    const totalValue = event.target.value;
-                    updateField("totalMtr", totalValue);
-
-                    if (totalValue === "") {
-                      setCutRows((current) => current.map((row) => ({ ...row, value: "" })));
-                      return;
-                    }
-
-                    const numeric = Number(totalValue);
-                    if (!Number.isFinite(numeric) || numeric < 0) return;
-                    cutTargetRef.current = numeric;
-
-                    setCutRows((current) => {
-                      const count = Math.max(1, Number(form.noOfCuts || current.length || 1));
-                      return recalcMeterCutRows({
-                        count,
-                        totalMtr: numeric,
-                        rows: current,
-                        changedIndex: 0,
-                        changedValue: String(numeric),
-                      });
-                    });
+                    updateField("totalMtr", event.target.value);
+                    setCutError("");
                   }} className={`w-full rounded-md px-2 py-2 text-sm ${editableClass}`} />
                 </div>
               )}
@@ -2579,59 +2588,102 @@ function AddItemModal({ open, onClose, onSubmit, onSubmitAndPrint, barcodeFormat
               </div>
             </div>
 
-            {form.isMtr && (
-              <div className="mt-5 rounded-md border border-[#dfe4eb] bg-[#f8fafc] p-3">
-                <div className="grid grid-cols-[70px_1fr_48px] items-center gap-2">
-                  <div className="text-center text-xs font-semibold uppercase tracking-wide text-gray-600">SL</div>
-                  <div className="text-center text-xs font-semibold uppercase tracking-wide text-gray-600">Cuts(mtr)</div>
-                  <div />
-                </div>
+            {form.isMtr && (() => {
+              /* worked out on every render from the boxes and Total MTR - never
+                 stored, and never written into a cut */
+              const cutsTotal = sumCutRows(cutRows);
+              const availableMtr = round2(Number(form.totalMtr || 0));
+              const hasAvailable = availableMtr > 0;
+              const balanceMtr = round2(availableMtr - cutsTotal);
+              const overAvailable = hasAvailable && balanceMtr < 0;
+              /* side by side only from lg: with the 280px sidebar open, a
+                 tablet-width content area cannot hold both */
+              const cutGrid = "grid grid-cols-[40px_minmax(0,1fr)_32px] items-center gap-2 sm:grid-cols-[40px_minmax(0,220px)_32px]";
+              return (
+                <div className="mt-5 rounded-md border border-[#dfe4eb] bg-[#f8fafc] p-3">
+                  <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:gap-8">
+                    <div className="w-full lg:w-auto">
+                      <div className={`${cutGrid} px-0.5`}>
+                        <div className="text-center text-[11px] font-semibold uppercase tracking-wide text-gray-600">SL</div>
+                        <div className="text-[11px] font-semibold uppercase tracking-wide text-gray-600">Cut (MTR)</div>
+                        <div />
+                      </div>
 
-                {cutRows.map((cut, index) => (
-                  <div key={cut.id ?? index} className={`mt-2 grid grid-cols-[70px_1fr_48px] items-center gap-2 rounded-md p-1 ${index === focusedCutIndex ? "bg-orange-50" : ""}`}>
-                    <div className={`flex h-10 items-center justify-center rounded-md border border-gray-300 text-sm font-medium text-gray-700 ${index === focusedCutIndex ? "bg-orange-100" : "bg-[#f3f5f9]"}`}>{index + 1}</div>
-                    <input
-                      type="number"
-                      min={0}
-                      step="0.01"
-                      value={cut.value}
-                      ref={(el) => { cutsInputRefs.current[index] = el; }}
-                      onWheel={(e) => e.currentTarget.blur()}
-                      onFocus={() => setFocusedCutIndex(index)}
-                      onChange={(event) => updateCutValue(index, event.target.value)}
-                      onBlur={() => commitCutValue(index)}
-                      onKeyDown={(e) => {
-                        if (e.key === "Tab" && !e.shiftKey && index < cutRows.length - 1) {
-                          e.preventDefault();
-                          cutsInputRefs.current[index + 1]?.focus();
-                        } else if (e.key === "Tab" && e.shiftKey && index > 0) {
-                          e.preventDefault();
-                          cutsInputRefs.current[index - 1]?.focus();
-                        }
-                      }}
-                      className={`h-10 rounded-md px-2 text-sm ${index === focusedCutIndex ? "border border-orange-300 bg-orange-50" : editableClass} focus:border-[#0d5ddc] focus:outline-none focus:ring-2 focus:ring-[#0d5ddc]/20`}
-                    />
-                    <div className="flex h-10 items-center justify-center gap-2">
-                      {index === cutRows.length - 1 ? (
-                        <button type="button" tabIndex={-1} onClick={addCutRow} className="flex h-8 w-8 items-center justify-center rounded-md bg-[#2fbf6c] text-lg font-bold text-white">+</button>
-                      ) : (
-                        <button type="button" tabIndex={-1} onClick={() => removeCutRow(index)} className="flex h-8 w-8 items-center justify-center rounded-md bg-[#e34a3a] text-xl font-bold text-white">−</button>
-                      )}
+                      {cutRows.map((cut, index) => (
+                        <div key={cut.id ?? index} className={`mt-1 rounded-md p-0.5 ${cutGrid} ${index === focusedCutIndex ? "bg-orange-50" : ""}`}>
+                          <div className={`flex h-8 items-center justify-center rounded-md border border-gray-300 text-xs font-medium text-gray-700 ${index === focusedCutIndex ? "bg-orange-100" : "bg-[#f3f5f9]"}`}>{index + 1}</div>
+                          <input
+                            type="text"
+                            inputMode="decimal"
+                            autoComplete="off"
+                            aria-label={`Cut ${index + 1} (MTR)`}
+                            value={cut.value}
+                            ref={(el) => { cutsInputRefs.current[index] = el; }}
+                            onFocus={() => setFocusedCutIndex(index)}
+                            onChange={(event) => {
+                              /* a refused or cleaned-up keystroke: put the kept
+                                 text back here, caret where it was, so React
+                                 finds nothing to rewrite and the caret does not
+                                 jump to the end */
+                              const input = event.target;
+                              const typed = input.value;
+                              const caret = input.selectionStart ?? typed.length;
+                              const kept = updateCutValue(index, typed);
+                              if (kept !== typed) {
+                                const at = Math.max(0, Math.min(kept.length, caret - (typed.length - kept.length)));
+                                input.value = kept;
+                                input.setSelectionRange(at, at);
+                              }
+                            }}
+                            onKeyDown={(e) => {
+                              if (e.key === "Tab" && !e.shiftKey && index < cutRows.length - 1) {
+                                e.preventDefault();
+                                cutsInputRefs.current[index + 1]?.focus();
+                              } else if (e.key === "Tab" && e.shiftKey && index > 0) {
+                                e.preventDefault();
+                                cutsInputRefs.current[index - 1]?.focus();
+                              }
+                            }}
+                            className={`h-8 w-full rounded-md px-2 text-sm tabular-nums ${index === focusedCutIndex ? "border border-orange-300 bg-orange-50" : editableClass} focus:border-[#0d5ddc] focus:outline-none focus:ring-2 focus:ring-[#0d5ddc]/20`}
+                          />
+                          <div className="flex h-8 items-center justify-center">
+                            {index === cutRows.length - 1 ? (
+                              <button type="button" tabIndex={-1} onClick={addCutRow} aria-label="Add cut" title="Add cut" className="flex h-7 w-7 items-center justify-center rounded-md bg-[#2fbf6c] text-base font-bold text-white">+</button>
+                            ) : (
+                              <button type="button" tabIndex={-1} onClick={() => removeCutRow(index)} aria-label={`Remove cut ${index + 1}`} title="Remove cut" className="flex h-7 w-7 items-center justify-center rounded-md bg-[#e34a3a] text-lg font-bold text-white">−</button>
+                            )}
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+
+                    <div className="w-full lg:w-64">
+                      <dl className="divide-y divide-gray-200 rounded-md border border-gray-200 bg-white text-sm" aria-live="polite">
+                        <div className="flex items-center justify-between gap-3 px-3 py-1.5">
+                          <dt className="text-gray-600">Total Cuts (MTR)</dt>
+                          <dd className="font-semibold tabular-nums text-gray-800">{cutsTotal.toFixed(2)}</dd>
+                        </div>
+                        <div className="flex items-center justify-between gap-3 px-3 py-1.5">
+                          <dt className="text-gray-600">Available (MTR)</dt>
+                          <dd className="font-semibold tabular-nums text-gray-800">{hasAvailable ? availableMtr.toFixed(2) : "-"}</dd>
+                        </div>
+                        <div className="flex items-center justify-between gap-3 px-3 py-1.5">
+                          <dt className="text-gray-600">Balance (MTR)</dt>
+                          <dd className={`font-semibold tabular-nums ${overAvailable ? "text-red-600" : hasAvailable && balanceMtr === 0 ? "text-green-700" : "text-gray-800"}`}>{hasAvailable ? balanceMtr.toFixed(2) : "-"}</dd>
+                        </div>
+                      </dl>
+                      {!hasAvailable && <p className="mt-1 text-[11px] text-gray-500">Enter Total MTR to see the balance.</p>}
                     </div>
                   </div>
-                ))}
 
-                <div className="mt-3 flex items-center justify-between gap-3 border-t border-gray-200 pt-3">
-                  <div className="text-sm font-medium text-gray-600">Total Cuts(mtr)</div>
-                  <input
-                    value={cutRows.reduce((sum, row) => sum + (Number(row.value || 0) || 0), 0).toFixed(2)}
-                    readOnly
-                    tabIndex={-1}
-                    className={`w-40 rounded-md px-2 py-2 text-sm ${readOnlyClass}`}
-                  />
+                  {(cutError || overAvailable) && (
+                    <div role="alert" className="mt-2 rounded border border-[#f5c2c7] bg-[#f8d7da] px-3 py-1.5 text-[12px] text-[#842029]">
+                      {cutError || `Total cuts (${cutsTotal.toFixed(2)} MTR) exceed the available ${availableMtr.toFixed(2)} MTR. Reduce a cut or correct Total MTR.`}
+                    </div>
+                  )}
                 </div>
-              </div>
-            )}
+              );
+            })()}
           </div>
 
           <div className="mt-6 flex items-center justify-end gap-2">
@@ -3855,8 +3907,41 @@ export default function GCRBarcodeGeneration({ grcId = null, initialRows = NO_RO
     return serialNo ? generateBarcodeValue({ ...parts, billSlNo: row.billSlNo, serialNo }) : "";
   }, [provisionalSerialNo, grcHeader.grcNumber, grcHeader.supplierCode]);
 
+  /* The final Submit bar is position:fixed - on a desktop that alone keeps it
+     at the window's bottom-right through any scroll. On a phone or tablet this
+     page is wider than the screen (fixed-width top bar and sidebar), and the
+     browser then pins fixed elements to that wider layout instead of to what
+     is on screen, so the bar sat off to the right and far below. This moves it
+     back by exactly the gap between where it landed and the visible
+     bottom-right - zero on a desktop, where nothing changes. */
+  const submitBarRef = useRef(null);
+  useEffect(() => {
+    const viewport = window.visualViewport;
+    const bar = submitBarRef.current;
+    if (!viewport || !bar) return undefined;
+    const place = () => {
+      bar.style.transform = "";
+      const box = bar.getBoundingClientRect();
+      const css = getComputedStyle(bar);
+      const dx = viewport.offsetLeft + viewport.width - parseFloat(css.right) - box.right;
+      const dy = viewport.offsetTop + viewport.height - parseFloat(css.bottom) - box.bottom;
+      if (Math.abs(dx) > 0.5 || Math.abs(dy) > 0.5) bar.style.transform = `translate(${dx}px, ${dy}px)`;
+    };
+    place();
+    viewport.addEventListener("resize", place);
+    viewport.addEventListener("scroll", place);
+    /* the page widening later (rows loaded) can widen that layout too */
+    const observer = typeof ResizeObserver === "function" ? new ResizeObserver(place) : null;
+    observer?.observe(document.body);
+    return () => {
+      viewport.removeEventListener("resize", place);
+      viewport.removeEventListener("scroll", place);
+      observer?.disconnect();
+    };
+  }, []);
+
   return (
-    <div className="min-h-screen bg-gray-100 px-2 py-4 md:py-6">
+    <div className="min-h-screen bg-gray-100 px-2 pb-24 pt-4 md:pt-6">
       <div className="flex items-center justify-between gap-4 pb-3">
         <div>
           <h1 className="text-xl font-semibold text-gray-800">GRC Barcode Generation</h1>
@@ -4150,25 +4235,35 @@ export default function GCRBarcodeGeneration({ grcId = null, initialRows = NO_RO
         </div>
       )}
 
-      <div className="fixed bottom-4 right-4 flex items-center gap-2">
-        {validRows.some((r) => r._importStatus === 'CHANGED') && (
-          <button
-            type="button"
-            onClick={() => {
-              const changedRows = validRows.filter((r) => r._importStatus === 'CHANGED');
-              if (window.confirm(`Generate barcodes for ${changedRows.length} changed row${changedRows.length === 1 ? '' : 's'} only?`)) {
-                saveRows(changedRows, false);
-              }
-            }}
-            disabled={saving}
-            className="rounded-md bg-red-600 px-5 py-2 text-sm font-semibold text-white shadow hover:bg-red-700 disabled:opacity-60"
-            title="Save only the rows that were changed during the last import"
-          >
-            {saving ? "Saving..." : `Generate For Changes (${validRows.filter((r) => r._importStatus === 'CHANGED').length})`}
-          </button>
-        )}
-        <button type="button" onClick={() => setShowSaveConfirm(true)} disabled={saving} className="rounded-md bg-green-600 px-5 py-2 text-sm font-semibold text-white shadow hover:bg-green-700 disabled:opacity-60">Submit</button>
-      </div>
+      {/* Pinned to the viewport's bottom-right, which is the content area's
+          bottom-right too - the sidebar is on the left. z-40 keeps it above
+          the Items table's sticky/relative layers (without it they painted
+          over the bar mid-scroll) and below the z-50 dialogs; the root's pb-24
+          lets the last rows and totals scroll clear of it. Portal ensures the
+          button is rendered at document body level, preventing it from moving
+          with any parent scroll containers. */}
+      {typeof document !== 'undefined' && createPortal(
+        <div ref={submitBarRef} className="no-print fixed bottom-4 right-4 z-40 flex items-center gap-2">
+          {validRows.some((r) => r._importStatus === 'CHANGED') && (
+            <button
+              type="button"
+              onClick={() => {
+                const changedRows = validRows.filter((r) => r._importStatus === 'CHANGED');
+                if (window.confirm(`Generate barcodes for ${changedRows.length} changed row${changedRows.length === 1 ? '' : 's'} only?`)) {
+                  saveRows(changedRows, false);
+                }
+              }}
+              disabled={saving}
+              className="rounded-md bg-red-600 px-5 py-2 text-sm font-semibold text-white shadow hover:bg-red-700 disabled:opacity-60"
+              title="Save only the rows that were changed during the last import"
+            >
+              {saving ? "Saving..." : `Generate For Changes (${validRows.filter((r) => r._importStatus === 'CHANGED').length})`}
+            </button>
+          )}
+          <button type="button" onClick={() => setShowSaveConfirm(true)} disabled={saving} className="rounded-md bg-green-600 px-5 py-2 text-sm font-semibold text-white shadow hover:bg-green-700 disabled:opacity-60">Submit</button>
+        </div>,
+        document.body
+      )}
     </div>
   );
 }

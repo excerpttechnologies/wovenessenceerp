@@ -1,11 +1,11 @@
 'use client';
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { createContext, useCallback, useContext, useEffect, useRef, useState } from 'react';
 import {
   search, getTopic, categories, OPENERS, CONFIDENT,
 } from '@/lib/chatbot/knowledge';
 
 /* ==========================================================================
-   Help bot - bottom right, on every page.
+   Help bot - opened from the top bar, on every page.
 
    NO AI. Every answer is a hand-written entry in lib/chatbot/knowledge.js,
    picked by keyword scoring. The same question always returns the same
@@ -83,8 +83,36 @@ function Answer({ topic }) {
   );
 }
 
-export default function ChatBot() {
+/* Open/closed lives here rather than in ChatBot so the trigger can sit in
+   the Topbar (ChatBotButton) while the panel stays mounted once in the admin
+   layout. Both must be inside ChatBotProvider. */
+const ChatBotContext = createContext({ open: false, setOpen: () => {} });
+
+export function ChatBotProvider({ children }) {
   const [open, setOpen] = useState(false);
+  return <ChatBotContext.Provider value={{ open, setOpen }}>{children}</ChatBotContext.Provider>;
+}
+
+/* Top bar trigger, next to the notification bell - same size and hover. */
+export function ChatBotButton() {
+  const { open, setOpen } = useContext(ChatBotContext);
+  return (
+    <button
+      type="button"
+      onClick={() => setOpen((o) => !o)}
+      aria-label="Open AI Assistant"
+      aria-expanded={open}
+      title="AI Assistant"
+      className={'no-print flex h-9 w-9 shrink-0 items-center justify-center rounded-md text-[#2563EB] hover:bg-[#EFF6FF] hover:text-[#1D4ED8] focus:outline-none focus-visible:ring-2 focus-visible:ring-brand/40 '
+        + (open ? 'bg-[#EFF6FF]' : '')}
+    >
+      <ChatIcon size={22} />
+    </button>
+  );
+}
+
+export default function ChatBot() {
+  const { open, setOpen } = useContext(ChatBotContext);
   const [msgs, setMsgs] = useState(GREETING);
   const [text, setText] = useState('');
   const [browsing, setBrowsing] = useState(null); // null | 'root' | category name
@@ -205,24 +233,14 @@ export default function ChatBot() {
 
   return (
     <div className="no-print">
-      {/* ------------------------------------------------------- launcher */}
-      {!open && (
-<button
-            type="button"
-            onClick={() => setOpen(true)}
-            aria-label="Open help"
-            className="fixed bottom-32 right-5 z-[60] flex h-14 w-14 items-center justify-center rounded-full bg-brand text-white shadow-pop transition hover:bg-brand-hover focus:outline-none focus:ring-4 focus:ring-brand/30"
-          >
-          <ChatIcon />
-        </button>
-      )}
-
-      {/* ---------------------------------------------------------- panel */}
+      {/* ---------------------------------------------------------- panel
+          The launcher is ChatBotButton in the Topbar, so on sm+ the panel
+          drops down from under the top bar at the right. */}
       {open && (
         <div
           role="dialog"
           aria-label="GROO ERP help"
-          className="fixed bottom-0 right-0 z-[60] flex h-[560px] max-h-[85vh] w-full flex-col overflow-hidden rounded-t-xl border border-line bg-white shadow-pop sm:bottom-32 sm:right-24 sm:w-[400px] sm:rounded-xl"
+          className="fixed bottom-0 right-0 z-[60] flex h-[560px] max-h-[85vh] w-full flex-col overflow-hidden rounded-t-xl border border-line bg-white shadow-pop sm:bottom-auto sm:right-5 sm:top-[calc(theme(spacing.topbar)+8px)] sm:max-h-[calc(100vh-theme(spacing.topbar)-24px)] sm:w-[400px] sm:rounded-xl"
         >
           {/* header */}
           <div className="flex shrink-0 items-center gap-2.5 bg-sidebar px-4 py-3 text-white">

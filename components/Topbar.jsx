@@ -1,6 +1,7 @@
 'use client';
 import Icon from './Icon';
 import NotificationBell from './NotificationBell';
+import { ChatBotButton } from './ChatBot';
 import { useScope, FIN_YEARS } from './ScopeContext';
 
 export default function Topbar({ onToggleSidebar }) {
@@ -76,9 +77,13 @@ export default function Topbar({ onToggleSidebar }) {
         </span>
       </div>
 
-      <NotificationBell />
+      {/* bell and help bot as one group, so the pair keeps a tight gap */}
+      <div className="flex shrink-0 items-center gap-1">
+        <NotificationBell />
+        <ChatBotButton />
+      </div>
 
-      <button type="button" onClick={onToggleSidebar} className="border-0 bg-transparent p-1 text-[#3c4a63]">
+      <button type="button" onClick={onToggleSidebar} aria-label="Toggle menu" className="border-0 bg-transparent p-1 text-[#3c4a63]">
         <Icon name="burger" size={22} />
       </button>
     </header>
