@@ -1,17 +1,20 @@
 'use client';
 import BarcodeSvg from './BarcodeSvg';
-import { toLabelData } from '@/lib/barcodeLabelPrint';
+import { toLabelData, formatLabelPrice } from '@/lib/barcodeLabelPrint';
 import {
   labelGeometry,
   labelsPerRow,
   barsBox,
   fitType,
   MONO_CHAR_W,
+  TEXT_CHAR_W,
   SECTION_ORDER,
   PAD_X_MM,
   PAD_Y_MM,
   BORDER_MM,
   QUIET_ZONE_MODULES,
+  BAR_TEXT_GAP_MM,
+  DESCRIPTION_LINES,
   mm,
 } from '@/lib/barcodeLabelGeometry';
 
@@ -42,16 +45,18 @@ import {
 
 /* -----------------------------------------------------------------------
    LABEL FIELD MAP
-   Controls which toLabelData() key fills LEFT | CENTRE | RIGHT on each row.
+   Controls which label key fills LEFT | CENTRE | RIGHT on each row. P-M-F
+   and the WSP price are no longer printed - both stay on the record, only
+   the sticker leaves them off.
 
-     detail row 1   hsn | itemCode | pmf
-     detail row 2   encodedCostPrice | qtyWithUnit | wspPrice
-     RATE line      sellingPrice  (offerPrice → retailPrice fallback)
+     detail row 1   hsn | itemCode | qtyWithUnit (qty + unit together)
+     detail row 2   encodedCostPrice | (blank) | offer (worked out in Label:
+                    only when there is an offer that differs from the rate)
+     RATE line      retailPrice, centred
 ----------------------------------------------------------------------- */
 export const LABEL_FIELDS = {
-  detailRow1: ['hsn', 'itemCode', 'pmf'],
-  detailRow2Left: 'encodedCostPrice',
-  detailRow2Price: 'wspPrice',
+  detailRow1: ['hsn', 'itemCode', 'qtyWithUnit'],
+  detailRow2: ['encodedCostPrice', '', ''],
 };
 
 /* -----------------------------------------------------------------------
@@ -69,7 +74,7 @@ export function labelFor(row) {
   const qtyText =
     String(row?.qty ?? '').trim() ||
     (label.quantity ? String(label.quantity) : '');
-  return { ...label, qtyWithUnit: [qtyText, label.unit].filter(Boolean).join(' ') };
+  return { ...label, qtyText, qtyWithUnit: [qtyText, label.unit].filter(Boolean).join(' ') };
 }
 
 /* The bars are drawn by the shared components/BarcodeSvg.jsx — the one
@@ -92,6 +97,19 @@ const ONE_LINE = { overflow: 'hidden', whiteSpace: 'nowrap', textOverflow: 'elli
 const ONE_LINE_FULL = { overflow: 'hidden', whiteSpace: 'nowrap' };
 /* the gutter between the two halves of a footer / identifier row */
 const ROW_GAP_MM = 1;
+/* The space between the columns of the two product rows. The columns
+   themselves are only as wide as their values (see productColumns in Label),
+   so the block takes the width it needs instead of being spread across the
+   whole sticker - a smaller gap alone could not do that, because fixed
+   percentage columns keep each value pinned to the left edge, the middle
+   and the right edge whatever the gap is. */
+const PRODUCT_GAP_MM = 3;
+/* ...the LEAST space between them: the centred block spreads its columns
+   apart until it is this share of the sticker's usable width wide, so every
+   label's block has the same outer edges whatever its values are */
+const PRODUCT_BLOCK_SHARE = 0.85;
+/* barcode number -> composed value: a fixed ~1cm, not pushed to the edges */
+const ID_GAP_MM = 10;
 /* The fixed wording printed on every sticker. Named rather than written into
    the markup so the footer's type size can be worked out from the very
    strings that are about to be drawn - the fit and the text cannot drift
@@ -104,10 +122,10 @@ const DISCLAIMER = 'No exchange, no guarantee, No Return';
    Label — one complete printable sticker.
 
               [ machine-readable barcode ]
-     barcodeNo                       barcodeGenerated
-     description (up to 2 lines)
-     HSN            item code          P-M-F
-     encoded PR     qty + unit         wsp price
+     barcodeNo  <-10mm->  barcodeGenerated
+     description (up to 3 lines)
+     HSN   item code   qty + unit      (compact: each column as wide as
+     encoded PR        ₹offer/-         its values, 3mm apart)
                    RATE : ₹.../-
      (Inclusive all taxes)       DRY WASH ONLY
          No exchange, no guarantee, No Return
@@ -128,16 +146,24 @@ export function Label({ label, geometry }) {
   const type = (key) => mm(g.type(key));
   /* how big THIS value's bars are drawn inside the barcode band */
   const bars = barsBox(g, label.barcode);
-  /* built once, so the size it is set at is measured from the very string
-     that is drawn - business wording and value unchanged */
-  const rateText = 'RATE : ₹' + (label.sellingPrice ?? '') + '/-';
+  /* built once, so the size it is set at is measured from the very strings
+     that are drawn. RATE is the retail price (the offer only when a row has
+     no retail price at all); the offer is printed (third column, row 5)
+     only for a real offer - a row with none carries '' or, from an Excel
+     import, its own retail price. */
+  const ratePrice = formatLabelPrice(label.retailPrice || label.sellingPrice);
+  const offerPrice = formatLabelPrice(label.offerPrice);
+  const hasOffer = offerPrice !== '' && Number(offerPrice) > 0
+    && ratePrice !== '' && Number(offerPrice) !== Number(ratePrice);
+  const rateText = 'RATE : ₹' + ratePrice + '/-';
+  const offerText = hasOffer ? offerPrice : '';
 
   const detailRow1 = LABEL_FIELDS.detailRow1.map((k) => label[k] ?? '');
-  const detailRow2 = [
-    label[LABEL_FIELDS.detailRow2Left],
-    label.qtyWithUnit,
-    label[LABEL_FIELDS.detailRow2Price],
-  ];
+  const detailRow2 = LABEL_FIELDS.detailRow2.map((k) => label[k] ?? '');
+  // Place offer price in the third column of row 2 if it exists
+  if (offerText) {
+    detailRow2[2] = offerText;
+  }
 
   /* THE BARCODE IDENTIFIER ROW — both values off the SAME record.
 
@@ -153,28 +179,44 @@ export function Label({ label, geometry }) {
   const barcodeNo = label.barcodeNo;
   const secondary = label.barcodeGenerated ? label.barcode : '';
 
-  /* A row of three values on one grid, so each value's horizontal position is
-     fixed regardless of how long its neighbours are. minmax(0, …) stops
-     a long value widening its own column and displacing the others. */
+  /* THE PRODUCT BLOCK takes only the width its values need. Each of its
+     three columns is as wide as the longer of its two values, and BOTH rows
+     use those same widths, so the columns stay lined up under each other;
+     PRODUCT_GAP_MM sits between them and the block is centred on the
+     sticker. Widths come from the same character estimate
+     fitType sizes type with, and when the values are too long for the
+     sticker the whole block is set smaller together rather than cut. */
+  const allChars = [0, 1, 2].map((i) => Math.max(String(detailRow1[i] ?? '').length, String(detailRow2[i] ?? '').length));
+  /* a column empty on both rows takes no place (and no gap) at all */
+  const productCols = [0, 1, 2].filter((i) => allChars[i] > 0);
+  const productChars = productCols.map((i) => allChars[i]);
+  const gapCount = Math.max(0, productCols.length - 1);
+  const productFont = fitType('M'.repeat(productChars.reduce((sum, n) => sum + n, 0)), g.usableW - PRODUCT_GAP_MM * gapCount,
+    Math.min(g.type('detailRow1'), g.type('detailRow2')));
+  const productWidths = productChars.map((n) => n * productFont * TEXT_CHAR_W);
+  const productGap = gapCount
+    ? Math.max(PRODUCT_GAP_MM, (g.usableW * PRODUCT_BLOCK_SHARE - productWidths.reduce((sum, w) => sum + w, 0)) / gapCount)
+    : 0;
+  const productColumns = productWidths.map((w) => mm(w)).join(' ');
   const threeUp = (key, cells, style = {}) => (
     <div
       style={{
         display: 'grid',
-        gridTemplateColumns: 'minmax(0, 1fr) minmax(0, 1.5fr) minmax(0, 1fr)',
+        gridTemplateColumns: productColumns,
+        /* the block is centred on the sticker, like the number row above -
+           both rows share productColumns and productGap, so they line up */
+        justifyContent: 'center',
         alignItems: 'center',
-        columnGap: mm(0.8),
+        columnGap: mm(productGap),
         height: band(key),
-        /* sized so all three values fit the row between them - a long item
-           code now sets the row a shade smaller instead of being cut, and
-           the columns still hold each value in its own fixed position */
-        fontSize: mm(fitType(cells, g.usableW - 1.6, g.type(key))),
+        fontSize: mm(productFont),
         lineHeight: band(key),
         ...style,
       }}
     >
-      {cells.map((value, i) => (
-        <span key={i} style={{ ...ONE_LINE, textAlign: ['left', 'center', 'right'][i] }}>
-          {value}
+      {productCols.map((i) => (
+        <span key={i} style={{ ...ONE_LINE, textAlign: 'left' }}>
+          {cells[i]}
         </span>
       ))}
     </div>
@@ -202,13 +244,14 @@ export function Label({ label, geometry }) {
     >
       {/* 1 — MACHINE-READABLE BARCODE, at the top of every label.
 
-          SIZED FROM THE VALUE, NOT FROM THE BAND. barsBox works out how many
-          modules this symbol needs and draws it at TARGET_X_MM per module,
-          centred, up to the label's usable width (lib/barcodeLabelGeometry.js).
-          A six-character counter number therefore comes out about 36 x 8mm
-          inside a 47 x 12.5mm band — the bars are smaller and the white space
-          around them is real — while a long composed value still gets every
-          millimetre the sticker has, exactly as before.
+          SIZED FROM THE VALUE, NOT FROM THE BAND. readableBarsBox works out
+          how many modules this symbol needs and the width it can be read at
+          (TARGET_X_MM per module, capped at BAR_MAX_WIDTH_SHARE of the label,
+          not below the ISO / MIN_X_MM floor); barsBox then draws it at
+          BAR_DRAW_SCALE (0.5) of that width, centred, bottom-anchored
+          (lib/barcodeLabelGeometry.js). On 50 x 40 a composed value comes
+          out about 21 x 8.2mm at ~0.095mm/module - BELOW the readable floor,
+          see BAR_DRAW_SCALE before printing.
 
           Nothing is cropped or squeezed to achieve that: the box is modules x
           module-width, so every bar keeps its proportion to every other bar.
@@ -218,11 +261,15 @@ export function Label({ label, geometry }) {
           pass under the scanner. quietZone is the blank run either side that
           tells a scanner where the symbol starts and ends — inside the SVG's
           own viewBox, so it survives however narrow the label is. */}
+      {/* The bars sit at the FOOT of the band, BAR_TEXT_GAP_MM above the
+          barcode number, rather than centred with ~2.4mm of white below. */}
       <div
         style={{
+          boxSizing: 'border-box',
           height: band('barcode'),
+          paddingBottom: mm(BAR_TEXT_GAP_MM),
           display: 'flex',
-          alignItems: 'center',
+          alignItems: 'flex-end',
           justifyContent: 'center',
           overflow: 'hidden',
         }}
@@ -238,50 +285,62 @@ export function Label({ label, geometry }) {
         </div>
       </div>
 
-      {/* 2 — barcodeNo (LEFT) and barcodeGenerated (RIGHT), one row, directly
-          below the bars. textTransform none: globals.css uppercases body
-          text and a barcode value is case-sensitive. */}
+      {/* 2 — barcodeNo then barcodeGenerated, ID_GAP_MM (~1cm) apart, the
+          pair CENTRED under the bars. textTransform none: globals.css
+          uppercases body text and a barcode value is case-sensitive. */}
       <div
         style={{
           display: 'flex',
           alignItems: 'center',
-          justifyContent: 'space-between',
-          gap: mm(ROW_GAP_MM),
+          justifyContent: 'center',
+          gap: mm(secondary ? ID_GAP_MM : 0),
           height: band('identifier'),
           /* THE BARCODE NUMBER IS NEVER CUT. Both values are measured against
-             the width they have to share and the row is set at the largest
-             size where BOTH fit whole - so a long composed value shrinks the
-             pair rather than eating into the number beside it. Monospace, so
-             the estimate is exact. */
+             the width they have to share (the gap taken out first) and the
+             row is set at the largest size where BOTH fit whole - so a long
+             composed value shrinks the pair rather than eating into the
+             number beside it. Monospace, so the estimate is exact. */
           fontSize: mm(fitType(
             [barcodeNo, secondary],
-            g.usableW - ROW_GAP_MM,
+            g.usableW - (secondary ? ID_GAP_MM : 0),
             g.type('identifier'),
             MONO_CHAR_W,
           )),
           lineHeight: band('identifier'),
           fontFamily: 'ui-monospace, SFMono-Regular, Menlo, Consolas, monospace',
-          fontWeight: 600,
+          /* regular here, bold on the number: Consolas (what this stack
+             resolves to on Windows) has only 400 and 700, so the 600 this
+             row used to carry already rendered bold and a bolder number
+             could not stand out from it */
+          fontWeight: 400,
           letterSpacing: '0.01em',
           textTransform: 'none',
         }}
       >
-        <span style={{ ...ONE_LINE_FULL, textAlign: 'left' }}>{barcodeNo}</span>
-        <span style={{ ...ONE_LINE_FULL, textAlign: 'right' }}>{secondary}</span>
+        {/* the unit's own number in bold; the composed value also bold to match */}
+        {/* heavier than bold: Consolas stops at 700, so a thin outline in
+            the text colour thickens every stroke without widening the
+            characters (the row's fit and the 10mm gap are unchanged) */}
+        <span style={{ ...ONE_LINE_FULL, fontWeight: 700, WebkitTextStroke: '0.06em currentColor' }}>{barcodeNo}</span>
+        {secondary && <span style={{ ...ONE_LINE_FULL, fontWeight: 700, WebkitTextStroke: '0.06em currentColor' }}>{secondary}</span>}
       </div>
 
-      {/* 3 — the print description, two lines, left-aligned */}
+      {/* 3 — the print description, up to DESCRIPTION_LINES (3) lines,
+          centred; its band is three lines tall, so a longer
+          description wraps in its own space instead of reaching the rows
+          below */}
       <div
         style={{
           height: band('description'),
           fontSize: type('description'),
-          lineHeight: mm(g.band('description') / 2),
-          textAlign: 'left',
+          lineHeight: mm(g.band('description') / DESCRIPTION_LINES),
+          /* centred, like the number row above and the product block below */
+          textAlign: 'center',
           color: '#334155',
           overflow: 'hidden',
           display: '-webkit-box',
           WebkitBoxOrient: 'vertical',
-          WebkitLineClamp: 2,
+          WebkitLineClamp: DESCRIPTION_LINES,
           /* a long unbroken run - a description with no spaces, a stitched
              style code - breaks inside the label instead of running past its
              right edge */
@@ -292,13 +351,13 @@ export function Label({ label, geometry }) {
         {label.description}
       </div>
 
-      {/* 4 — HSN | item code | P-M-F */}
-      {threeUp('detailRow1', detailRow1, { fontWeight: 600 })}
+      {/* 4 — HSN | item code | qty + unit (normal weight: information, not price) */}
+      {threeUp('detailRow1', detailRow1, { fontWeight: 400 })}
 
-      {/* 5 — encoded cost price | qty + unit | wsp price */}
-      {threeUp('detailRow2', detailRow2, { fontWeight: 600 })}
+      {/* 5 — encoded cost price | (blank) | offer price */}
+      {threeUp('detailRow2', detailRow2, { fontWeight: 400 })}
 
-      {/* 6 — RATE */}
+      {/* 6 — RATE, centred */}
       <div
         style={{
           height: band('rate'),

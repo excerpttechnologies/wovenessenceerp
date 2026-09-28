@@ -844,7 +844,7 @@ export default function ItemsSheet({
                     data-c={c}
                     scope="col"
                     style={{ minWidth: col.width, backgroundColor: inSelection ? HEADER_SELECTED : undefined }}
-                    title={col.readOnly ? `${col.label} - worked out, not typed` : `${col.label} - click to select the column`}
+                    title={col.readOnly ? `${col.label} - ${col.note || "worked out, not typed"}` : `${col.label} - click to select the column`}
                     className={`sticky top-0 cursor-pointer select-none whitespace-nowrap border-b border-r border-t border-gray-300 bg-gray-100 px-2 py-2 ${c === 0 ? "left-0 z-30 border-l" : "z-20"}`}
                   >
                     {col.label}

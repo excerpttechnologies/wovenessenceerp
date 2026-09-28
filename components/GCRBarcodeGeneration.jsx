@@ -20,7 +20,7 @@ import { toGridRow, pmfOf, PMF_REQUIRED_MESSAGE } from "@/lib/barcodeRowSync";
 import { grcTotals, r2, rowQty, rowTaxable, rowGst, rowNet } from "@/lib/grcMoney";
 import {
   money, finalRateOf, sameValue, sheetColumns, sheetProblems, isLockedRow, lockReason, isBlankRow,
-  SHEET_INHERITED_FIELDS,
+  SHEET_INHERITED_FIELDS, ITEM_FIELD_LABELS,
 } from "@/lib/itemsSheet";
 import ItemsSheet from "./ItemsSheet";
 import {
@@ -49,6 +49,51 @@ const decimal2 = (value) => {
   return raw.slice(0, dot + 1) + raw.slice(dot + 1).replace(/\./g, '').slice(0, 2);
 };
 const fixed2 = (value) => (Number.isFinite(Number(value)) ? Number(value).toFixed(2) : '');
+
+/* THE ADD ITEM FORM'S REQUIRED FIELDS, checked before Submit and Submit &
+   Print Label - both go through submit(), so neither can skip them.
+   Returns { formKey: message } in the order the fields sit on the form (the
+   first is the one focused). Blank, null, undefined and non-numbers are
+   refused; the Purchase Rate keeps its own rule (purchasePriceError: above
+   0). An MTR entry has No. of Cuts where a piece entry has Quantity. */
+const DISCOUNT_TYPES = ["Percentage", "Flat"];
+const REQUIRED_NUMBERS = [
+  ["purchaseRate", "Purchase Rate"],
+  ["discountType", "Discount Type"],
+  ["discount", "Discount"],
+  ["finalPrice", "Final Price"],
+  ["markupRSP", "Markup RSP %"],
+  ["rspPrice", "RSP Price"],
+  ["markupWSP", "Markup WSP %"],
+  ["wspPrice", "WSP Price"],
+  ["markupDP", "Markup E-COMM %"],
+  ["dpPrice", "E-COMM Price"],
+];
+const REQUIRED_LABELS = Object.fromEntries([["qty", "Quantity"], ["noOfCuts", "No. of Cuts"], ...REQUIRED_NUMBERS]);
+function requiredFieldErrors(form) {
+  const errors = {};
+  const blank = (value) => value === null || value === undefined || String(value).trim() === "";
+  const notNumber = (value) => !Number.isFinite(Number(String(value).trim()));
+  const [countKey, countLabel] = form?.isMtr ? ["noOfCuts", "No. of Cuts"] : ["qty", "Quantity"];
+  const count = form?.[countKey];
+  if (blank(count)) errors[countKey] = `${countLabel} is required`;
+  else if (notNumber(count)) errors[countKey] = `${countLabel} must be a number`;
+  else if (!(Number(count) > 0)) errors[countKey] = `${countLabel} must be greater than 0`;
+  for (const [key, label] of REQUIRED_NUMBERS) {
+    const value = form?.[key];
+    if (key === "discountType") {
+      if (!DISCOUNT_TYPES.includes(value)) errors[key] = `${label} is required`;
+      continue;
+    }
+    if (blank(value)) errors[key] = `${label} is required`;
+    else if (notNumber(value)) errors[key] = `${label} must be a number`;
+    else if (key === "purchaseRate") {
+      const problem = purchasePriceError(value);
+      if (problem) errors[key] = problem;
+    }
+  }
+  return errors;
+}
 /* the Add Item form's three offer percentages */
 const OFFER_PCT_KEYS = ["rspOfferPct", "wspOfferPct", "dpOfferPct"];
 /* start of the notice shown when saved rows get their GST% from HSN Master
@@ -123,42 +168,9 @@ async function resolveSlabRates(taxSlabs) {
 const meterRegex = /(mtr|meter|metre|meters|metres)/i;
 const pcRegex = /(pc|pcs|piece|pieces)/i;
 
-const exportFieldLabels = {
-  itemCode: "Item Code",
-  itemName: "Item Name",
-  goodsType: "Attribute Add On",
-  sm: "SM",
-  p_m_f: "P-M-F",
-  hsn: "HSN",
-  gst: "GST",
-  uom: "UOM",
-  qty: "Quantity",
-  noOfCuts: "No. of Cuts",
-  totalMtr: "Total MTR",
-  billSlNo: "Bill Sl No.",
-  purchaseRate: "Purchase Rate",
-  discountType: "Discount Type",
-  discount: "Discount",
-  finalPrice: "Final Price",
-  retailPrice: "Retail Price",
-  disc1: "Disc 1",
-  uniqueBarcode: "Unique Barcode",
-  barcodeNo: "Barcode No",
-  supplierDescription: "Supplier Description",
-  printDescription: "Print Description",
-  rsp: "RSP",
-  wsp: "WSP",
-  dp: "E-COMM",
-  offerPrice: "Offer Price",
-  wspPrice: "WSP Offer Price",
-  dpPrice: "E-COMM Offer Price",
-  rspOfferPct: "RSP Offer %",
-  wspOfferPct: "WSP Offer %",
-  dpOfferPct: "E-COMM Offer %",
-  markupRSP: "Markup RSP %",
-  markupWSP: "Markup WSP %",
-  markupDP: "Markup E-COMM %",
-};
+/* Export Excel's headings - the same list, in the same order, as the ITEMS
+   grid's columns (lib/itemsSheet.js), so a sheet and a workbook agree. */
+const exportFieldLabels = ITEM_FIELD_LABELS;
 
 /* These four columns were exported under "DP ..." before the label became
    E-COMM. A workbook exported back then is still a perfectly good file to
@@ -1125,6 +1137,26 @@ function AddItemModal({ open, onClose, onSubmit, onSubmitAndPrint, barcodeFormat
   });
 
   const [form, setForm] = useState(() => createBlankForm());
+  /* Required-field problems from the last Submit, { formKey: message }. An
+     entry drops as soon as its field is put right (the effect below); none is
+     ever added except by Submit, so the form is not red before it is tried. */
+  const [fieldErrors, setFieldErrors] = useState({});
+  const formRootRef = useRef(null);
+  useEffect(() => {
+    setFieldErrors((current) => {
+      const keys = Object.keys(current);
+      if (!keys.length) return current;
+      const now = requiredFieldErrors(form);
+      const still = Object.fromEntries(keys.filter((key) => now[key]).map((key) => [key, now[key]]));
+      /* a field whose problem CHANGED (not a number -> not above 0) shows the new one */
+      return keys.every((key) => now[key] === current[key]) ? current : still;
+    });
+  }, [form]);
+  /* the red outline and the message under a required field */
+  const invalid = (key) => (fieldErrors[key] ? " !border-red-500 ring-1 ring-red-500" : "");
+  const fieldError = (key) => (fieldErrors[key]
+    ? <p className="text-[11px] font-medium text-red-600" role="alert">{fieldErrors[key]}</p>
+    : null);
   /* State for the next Serial No. (4th part of barcode) - fetched from backend.
      Seeded from Item Summary SL NO (the row's position in the summary table),
      passed in as initialNextSerialNo. The operator can still override it. */
@@ -1296,6 +1328,7 @@ function AddItemModal({ open, onClose, onSubmit, onSubmitAndPrint, barcodeFormat
       return makeMeterCutRows(count, Number(form.totalMtr || 0));
     });
     setCutError("");
+    setFieldErrors({});
 
     /* pre-populate dropdowns with initial results so they are not blank on open */
     searchItems('');
@@ -1998,6 +2031,10 @@ function AddItemModal({ open, onClose, onSubmit, onSubmitAndPrint, barcodeFormat
      operator sees in the grid is the number that will be saved and the number
      on the label they may print immediately. */
   const submit = async (printAfterSubmit = false) => {
+    /* every required field that is wrong is outlined at once, whichever check
+       below stops the Submit first - they are enforced before the price rule */
+    const requiredErrors = requiredFieldErrors(form);
+    setFieldErrors(requiredErrors);
     /* Old Barcode is OPTIONAL - a blank one generates a label with no link
        back to a previous barcode, which is the normal case for goods that
        arrive unlabelled.
@@ -2050,12 +2087,14 @@ function AddItemModal({ open, onClose, onSubmit, onSubmitAndPrint, barcodeFormat
       || String(form.itemName || "").trim().replace(/\s+/g, "-").toUpperCase();
     if (!rowItemCode) {
       setReserveError("Please select an Item Code.");
+      formRootRef.current?.querySelector('input[placeholder="Search Item Code…"]')?.focus();
       return;
     }
     /* P-M-F is required - for Submit and Submit & Print Label alike, before
        anything is added or saved. No value is assumed for it. */
     if (!pmfOf(form)) {
       setReserveError(PMF_REQUIRED_MESSAGE);
+      formRootRef.current?.querySelector('[data-field="p_m_f"]')?.focus();
       return;
     }
     /* Checked HERE, before any barcode number is reserved: a zero-price line
@@ -2063,6 +2102,20 @@ function AddItemModal({ open, onClose, onSubmit, onSubmitAndPrint, barcodeFormat
        refused when the whole GRC was submitted - by which time it had spent
        real numbers from the sequence. Same rule as the grid and the API
        (lib/purchasePrice.js). */
+    /* THE REQUIRED FIELDS (requiredFieldErrors) - already outlined in red at
+       the top of submit(); here the Submit stops, says which fields, and puts
+       the cursor in the first of them. Nothing is added, saved or printed. */
+    if (Object.keys(requiredErrors).length) {
+      const first = Object.keys(requiredErrors)[0];
+      /* one problem: its own message (it may be the price rule's, "must be
+         more than 0"); several: the fields, by name */
+      const keys = Object.keys(requiredErrors);
+      setReserveError(keys.length === 1
+        ? requiredErrors[first].replace(/\.?$/, ".")
+        : "Please fill the required fields: " + keys.map((key) => REQUIRED_LABELS[key] || key).join(", ") + ".");
+      formRootRef.current?.querySelector(`[data-field="${first}"]`)?.focus();
+      return;
+    }
     const priceProblem = purchasePriceError(form.purchaseRate);
     if (priceProblem) {
       setReserveError(priceProblem);
@@ -2213,6 +2266,9 @@ function AddItemModal({ open, onClose, onSubmit, onSubmitAndPrint, barcodeFormat
       supplierDescription: current.supplierDescription,
       uniqueBarcode: current.uniqueBarcode,
       isMtr: current.isMtr,
+      /* MTR stays ticked with one empty cut row (setCutRows below), so No. of
+         Cuts says 1 - left blank, the next MTR entry was refused for it */
+      noOfCuts: current.isMtr ? "1" : "",
       discountType: current.discountType,
       discount: current.discount,
       markupRSP: current.markupRSP,
@@ -2232,7 +2288,7 @@ function AddItemModal({ open, onClose, onSubmit, onSubmitAndPrint, barcodeFormat
   };
 
   return (
-    <div className="mt-4 w-full rounded-[8px] border border-slate-200 bg-white shadow-sm">
+    <div ref={formRootRef} className="mt-4 w-full rounded-[8px] border border-slate-200 bg-white shadow-sm">
       <div className="px-5 py-4">
           {/* ROW 1: Old Barcode | Item Code | HSN | GST% | SM | P-M-F.
 
@@ -2322,7 +2378,7 @@ function AddItemModal({ open, onClose, onSubmit, onSubmitAndPrint, barcodeFormat
               </div>
               <div className="space-y-1">
                 <label className="block text-[11px] font-semibold text-gray-700">P-M-F *</label>
-                <input value={form.p_m_f} onChange={(event) => updateField("p_m_f", event.target.value)} className={`w-full rounded-md px-2 py-2 text-sm ${editableClass}`} />
+                <input data-field="p_m_f" value={form.p_m_f} onChange={(event) => updateField("p_m_f", event.target.value)} className={`w-full rounded-md px-2 py-2 text-sm ${editableClass}`} />
               </div>
             </div>
           </div>
@@ -2464,7 +2520,7 @@ function AddItemModal({ open, onClose, onSubmit, onSubmitAndPrint, barcodeFormat
               <div className="space-y-1">
                 <label className="block text-[11px] font-semibold text-gray-700">{form.isMtr ? "No. of Cuts *" : "Quantity *"}</label>
                 {form.isMtr ? (
-                  <input type="number" min={1} value={form.noOfCuts} onWheel={(e) => e.currentTarget.blur()} onChange={(event) => {
+                  <input data-field="noOfCuts" type="number" min={1} value={form.noOfCuts} onWheel={(e) => e.currentTarget.blur()} onChange={(event) => {
                     const raw = event.target.value;
                     updateField("noOfCuts", raw);
 
@@ -2475,10 +2531,11 @@ function AddItemModal({ open, onClose, onSubmit, onSubmitAndPrint, barcodeFormat
 
                     setCutError("");
                     setCutRows((current) => resizeCutRows(current, count));
-                  }} className={`w-full rounded-md px-2 py-2 text-sm ${editableClass}`} />
+                  }} className={`w-full rounded-md px-2 py-2 text-sm ${editableClass}${invalid("noOfCuts")}`} />
                 ) : (
-                  <input type="text" inputMode="decimal" value={form.qty} onWheel={(e) => e.currentTarget.blur()} onChange={(event) => updateField("qty", decimal2(event.target.value))} className={`w-full rounded-md px-2 py-2 text-sm ${editableClass}`} />
+                  <input data-field="qty" type="text" inputMode="decimal" value={form.qty} onWheel={(e) => e.currentTarget.blur()} onChange={(event) => updateField("qty", decimal2(event.target.value))} className={`w-full rounded-md px-2 py-2 text-sm ${editableClass}${invalid("qty")}`} />
                 )}
+                {fieldError(form.isMtr ? "noOfCuts" : "qty")}
               </div>
 
               {form.isMtr && (
@@ -2495,7 +2552,8 @@ function AddItemModal({ open, onClose, onSubmit, onSubmitAndPrint, barcodeFormat
 
               <div className="space-y-1">
                 <label className="block text-[11px] font-semibold text-gray-700">Purchase Rate *</label>
-                <input type="text" inputMode="decimal" value={form.purchaseRate} onWheel={(e) => e.currentTarget.blur()} onChange={(event) => updateField("purchaseRate", decimal2(event.target.value))} className={`w-full rounded-md px-2 py-2 text-sm ${editableClass}`} />
+                <input data-field="purchaseRate" type="text" inputMode="decimal" value={form.purchaseRate} onWheel={(e) => e.currentTarget.blur()} onChange={(event) => updateField("purchaseRate", decimal2(event.target.value))} className={`w-full rounded-md px-2 py-2 text-sm ${editableClass}${invalid("purchaseRate")}`} />
+                {fieldError("purchaseRate")}
                 {/* Read-only echo of the SAME value through the Purchase Rate
                     Code Master. The input above keeps the real number - this
                     is only what a label would print. Hidden entirely when no
@@ -2510,23 +2568,29 @@ function AddItemModal({ open, onClose, onSubmit, onSubmitAndPrint, barcodeFormat
 
               <div className="space-y-1">
                 <label className="block text-[11px] font-semibold text-gray-700">Discount Type</label>
-                <select value={form.discountType} onChange={(event) => updateField("discountType", event.target.value)} className={`w-full rounded-md px-2 py-2 text-sm ${editableClass}`}>
+                <select data-field="discountType" value={form.discountType} onChange={(event) => updateField("discountType", event.target.value)} className={`w-full rounded-md px-2 py-2 text-sm ${editableClass}${invalid("discountType")}`}>
+                  {/* a type that is neither (an old record) shows as blank, and
+                      Submit asks for one rather than guessing */}
+                  {!DISCOUNT_TYPES.includes(form.discountType) && <option value="">Select</option>}
                   <option value="Percentage">Percentage</option>
                   <option value="Flat">Flat</option>
                 </select>
+                {fieldError("discountType")}
               </div>
 
               <div className="space-y-1">
                 <label className="block text-[11px] font-semibold text-gray-700">Discount *</label>
-                <input type="text" inputMode="decimal" value={form.discount} onWheel={(e) => e.currentTarget.blur()} onChange={(event) => updateField("discount", decimal2(event.target.value))} className={`w-full rounded-md px-2 py-2 text-sm ${editableClass}`} />
+                <input data-field="discount" type="text" inputMode="decimal" value={form.discount} onWheel={(e) => e.currentTarget.blur()} onChange={(event) => updateField("discount", decimal2(event.target.value))} className={`w-full rounded-md px-2 py-2 text-sm ${editableClass}${invalid("discount")}`} />
+                {fieldError("discount")}
               </div>
 
               {!form.isMtr && (
                 <div className="space-y-1">
-                  <label className="block text-[11px] font-semibold text-gray-700">Final price *</label>
+                  <label className="block text-[11px] font-semibold text-gray-700">Final Price *</label>
                   {/* worked out, never typed - so not a Tab stop: Tab goes from
                       Discount straight on to the next box that takes input */}
-                  <input value={form.finalPrice} readOnly tabIndex={-1} className={`w-full rounded-md px-2 py-2 text-sm font-semibold ${readOnlyClass}`} />
+                  <input data-field="finalPrice" value={form.finalPrice} readOnly tabIndex={-1} className={`w-full rounded-md px-2 py-2 text-sm font-semibold ${readOnlyClass}${invalid("finalPrice")}`} />
+                  {fieldError("finalPrice")}
                 </div>
               )}
             </div>
@@ -2535,27 +2599,33 @@ function AddItemModal({ open, onClose, onSubmit, onSubmitAndPrint, barcodeFormat
             <div className="mt-4 grid grid-cols-1 gap-3 md:grid-cols-6">
               <div className="space-y-1">
                 <label className="block text-[11px] font-semibold text-gray-700">Markup RSP % *</label>
-                <input type="text" inputMode="decimal" value={form.markupRSP} onChange={(event) => updateMarkupValue("markupRSP", decimal2(event.target.value))} className={`w-full rounded-md px-2 py-2 text-sm ${editableClass}`} />
+                <input data-field="markupRSP" type="text" inputMode="decimal" value={form.markupRSP} onChange={(event) => updateMarkupValue("markupRSP", decimal2(event.target.value))} className={`w-full rounded-md px-2 py-2 text-sm ${editableClass}${invalid("markupRSP")}`} />
+                {fieldError("markupRSP")}
               </div>
               <div className="space-y-1">
                 <label className="block text-[11px] font-semibold text-gray-700">RSP Price *</label>
-                <input type="text" inputMode="decimal" value={form.rspPrice} onWheel={(e) => e.currentTarget.blur()} onChange={(event) => updateMarkupValue("rspPrice", decimal2(event.target.value))} className={`w-full rounded-md px-2 py-2 text-sm ${editableClass}`} />
+                <input data-field="rspPrice" type="text" inputMode="decimal" value={form.rspPrice} onWheel={(e) => e.currentTarget.blur()} onChange={(event) => updateMarkupValue("rspPrice", decimal2(event.target.value))} className={`w-full rounded-md px-2 py-2 text-sm ${editableClass}${invalid("rspPrice")}`} />
+                {fieldError("rspPrice")}
               </div>
               <div className="space-y-1">
                 <label className="block text-[11px] font-semibold text-gray-700">Markup WSP % *</label>
-                <input type="text" inputMode="decimal" value={form.markupWSP} onWheel={(e) => e.currentTarget.blur()} onChange={(event) => updateMarkupValue("markupWSP", decimal2(event.target.value))} className={`w-full rounded-md px-2 py-2 text-sm ${editableClass}`} />
+                <input data-field="markupWSP" type="text" inputMode="decimal" value={form.markupWSP} onWheel={(e) => e.currentTarget.blur()} onChange={(event) => updateMarkupValue("markupWSP", decimal2(event.target.value))} className={`w-full rounded-md px-2 py-2 text-sm ${editableClass}${invalid("markupWSP")}`} />
+                {fieldError("markupWSP")}
               </div>
               <div className="space-y-1">
                 <label className="block text-[11px] font-semibold text-gray-700">WSP Price *</label>
-                <input type="text" inputMode="decimal" value={form.wspPrice} onWheel={(e) => e.currentTarget.blur()} onChange={(event) => updateMarkupValue("wspPrice", decimal2(event.target.value))} className={`w-full rounded-md px-2 py-2 text-sm ${editableClass}`} />
+                <input data-field="wspPrice" type="text" inputMode="decimal" value={form.wspPrice} onWheel={(e) => e.currentTarget.blur()} onChange={(event) => updateMarkupValue("wspPrice", decimal2(event.target.value))} className={`w-full rounded-md px-2 py-2 text-sm ${editableClass}${invalid("wspPrice")}`} />
+                {fieldError("wspPrice")}
               </div>
               <div className="space-y-1">
                 <label className="block text-[11px] font-semibold text-gray-700">Markup E-COMM % *</label>
-                <input type="text" inputMode="decimal" value={form.markupDP} onWheel={(e) => e.currentTarget.blur()} onChange={(event) => updateMarkupValue("markupDP", decimal2(event.target.value))} className={`w-full rounded-md px-2 py-2 text-sm ${editableClass}`} />
+                <input data-field="markupDP" type="text" inputMode="decimal" value={form.markupDP} onWheel={(e) => e.currentTarget.blur()} onChange={(event) => updateMarkupValue("markupDP", decimal2(event.target.value))} className={`w-full rounded-md px-2 py-2 text-sm ${editableClass}${invalid("markupDP")}`} />
+                {fieldError("markupDP")}
               </div>
               <div className="space-y-1">
                 <label className="block text-[11px] font-semibold text-gray-700">E-COMM Price *</label>
-                <input type="text" inputMode="decimal" value={form.dpPrice} onWheel={(e) => e.currentTarget.blur()} onChange={(event) => updateMarkupValue("dpPrice", decimal2(event.target.value))} className={`w-full rounded-md px-2 py-2 text-sm ${editableClass}`} />
+                <input data-field="dpPrice" type="text" inputMode="decimal" value={form.dpPrice} onWheel={(e) => e.currentTarget.blur()} onChange={(event) => updateMarkupValue("dpPrice", decimal2(event.target.value))} className={`w-full rounded-md px-2 py-2 text-sm ${editableClass}${invalid("dpPrice")}`} />
+                {fieldError("dpPrice")}
               </div>
             </div>
 
