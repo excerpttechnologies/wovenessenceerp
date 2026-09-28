@@ -1758,7 +1758,18 @@ export default function ListView({ cfg, slug }) {
     const raw = col.value ? col.value(row) : row[col.k];
     let content;
  
-    if (col.f === "pill") {
+    /* col.render draws the cell itself, from the whole row. For a cell that
+       is more than a formatted value - the POS list stacks the amount over
+       the method it was paid by - where a format string has nowhere to put
+       the second line.
+
+       Checked FIRST, so a column can keep its `f` for the exports below while
+       the screen shows something richer: exportRows does not call this, and a
+       downloaded sheet stays plain text. Only a column that asks for one is
+       affected; every other list is untouched. */
+    if (col.render) {
+      content = col.render(row);
+    } else if (col.f === "pill") {
       const v = String(raw || "");
       content = v ? (
         <span
@@ -1853,19 +1864,120 @@ export default function ListView({ cfg, slug }) {
     );
   };
  
-  const exportRows = () =>
-    state.rows.map((r) =>
+  /* Takes the rows rather than reading state.rows, so the same formatting
+     serves the page on screen and the whole filtered set fetched below.
+     `labels` comes with the rows for the same reason: a `ref` column on page
+     seven cannot be resolved from the labels page one happened to bring. */
+  const exportRowsFrom = (rows, labels) =>
+    rows.map((r) =>
       visible.map((c) => {
         const v = c.value ? c.value(r) : r[c.k];
         if (c.f === "pill") return String(v || "");
         if (c.f === "dash") return v ? String(v) : "";
         if (c.f === "image") return v ? String(v) : "";
         if (c.f === "badges") return Array.isArray(v) ? v.join(", ") : String(v ?? "");
-        return fmt(c.f, v, state.labels);
+        return fmt(c.f, v, labels);
       }),
     );
   const exportHeaders = () => visible.map((c) => c.t);
+
+  /* Which columns Excel may keep as real numbers, so a sheet of amounts can
+     still be summed. Only `amount` qualifies: everything else this app writes
+     - a date, an invoice number with its leading zeros, a phone number - is
+     corrupted by Excel's guessing. See toXlsHtml in lib/format.js. */
+  const exportNumericCols = () => visible
+    .map((c, idx) => (c.f === "amount" ? idx : -1))
+    .filter((idx) => idx >= 0);
   const fileBase = String(slugPath).replace(/\//g, "-");
+
+  /* ------------------------------------------------------------------
+     EXPORTS COVER EVERYTHING THE FILTER MATCHES, not the ten rows on
+     screen. Downloading a CSV from page 1 of 4 and getting a quarter of the
+     data is the kind of thing nobody notices until the figures are wrong.
+
+     The rows are re-fetched rather than accumulated as the operator pages,
+     because pages already seen may be stale and pages never visited were
+     never held at all. Every part of the current query is reused - scope,
+     search, the filter card, the screen's own fixedQuery - so what lands in
+     the file is exactly what the table is showing, only all of it.
+     ------------------------------------------------------------------ */
+  const EXPORT_PAGE = 500;     // rows per request while collecting
+  const EXPORT_MAX = 50000;    // refuse to build a file bigger than this
+  const [exporting, setExporting] = useState(false);
+
+  async function fetchAllRows() {
+    /* THE SCOPE GATE APPLIES HERE TOO. An unscoped request is answered with
+       every tenant's rows - the whole reason load() waits - and an export is
+       the last place that should happen, because it writes them to a file. */
+    if (scopePending || noBusiness) return { rows: [], labels: {}, truncated: false };
+    if (cfg.searchOnly && Object.keys(filters).length === 0) {
+      return { rows: [], labels: {}, truncated: false };
+    }
+
+    let rows = [];
+    let labels = {};
+    let pageNo = 1;
+    let pages = 1;
+
+    do {
+      const qs = new URLSearchParams({
+        page: String(pageNo),
+        perPage: String(EXPORT_PAGE),
+        search,
+        business: business || "",
+        location: location || "",
+        finYear: finYear || "",
+      });
+      Object.entries(filters).forEach(([k, v]) => { if (v) qs.set(k, v); });
+      Object.entries(cfg.fixedQuery || {}).forEach(([k, v]) => {
+        if (v !== undefined && v !== null && v !== "") qs.set(k, String(v));
+      });
+
+      const r = await fetch(cfg.endpoint + "?" + qs, { cache: "no-store" });
+      const d = await r.json().catch(() => ({}));
+      if (!r.ok) throw new Error(d.error || `the server answered ${r.status}`);
+
+      rows = rows.concat(d.rows || []);
+      labels = { ...labels, ...(d.labels || {}) };
+      /* Followed from the ANSWER, not assumed: an endpoint that caps perPage
+         lower than we asked reports its own page count, and this still walks
+         all of it. */
+      pages = Number(d.pages) || 1;
+      pageNo += 1;
+    } while (pageNo <= pages && rows.length < EXPORT_MAX);
+
+    return { rows, labels, truncated: pageNo <= pages };
+  }
+
+  async function runExport(kind) {
+    /* One at a time. A second click while the first is still collecting
+       would fetch the whole set twice and hand back two files. */
+    if (exporting) return;
+    setExporting(true);
+    try {
+      const { rows, labels, truncated } = await fetchAllRows();
+      const headers = exportHeaders();
+      const body = exportRowsFrom(rows, labels);
+
+      if (kind === "csv") {
+        download(fileBase + ".csv", toCsv(headers, body, exportNumericCols()), "text/csv");
+      } else if (kind === "excel") {
+        download(fileBase + ".xls", toXlsHtml(cfg.title, headers, body, exportNumericCols()), "application/vnd.ms-excel");
+      } else {
+        printTable(cfg.title, headers, body);
+      }
+
+      /* Said out loud rather than silently short - a truncated export that
+         looks complete is the problem this whole change is fixing. */
+      setError(truncated
+        ? `Exported the first ${body.length} rows. Narrow the filter to take the rest.`
+        : null);
+    } catch (e) {
+      setError(`Could not build the export - ${e.message || "the server did not answer."}`);
+    } finally {
+      setExporting(false);
+    }
+  }
  
   async function remove(id) {
     if (!window.confirm("Delete this record?")) return;
@@ -2004,25 +2116,18 @@ export default function ListView({ cfg, slug }) {
             addDisabled={!mayCreate}
             addDisabledReason="You do not have Create permission for this screen."
             showCsv={cfg.showCsv !== false}
-            onExportCsv={() =>
-              download(
-                fileBase + ".csv",
-                toCsv(exportHeaders(), exportRows()),
-                "text/csv",
-              )
-            }
-            onExportExcel={() =>
-              download(
-                fileBase + ".xls",
-                toXlsHtml(cfg.title, exportHeaders(), exportRows()),
-                "application/vnd.ms-excel",
-              )
-            }
-            onExportPdf={() =>
-              printTable(cfg.title, exportHeaders(), exportRows())
-            }
+            exporting={exporting}
+            onExportCsv={() => runExport("csv")}
+            onExportExcel={() => runExport("excel")}
+            onExportPdf={() => runExport("pdf")}
           />
  
+          {exporting && (
+            <div className="mt-2 text-[12.5px] text-inkmuted">
+              Collecting every row the filter matches for the download...
+            </div>
+          )}
+
           <div className="mt-3 overflow-x-auto">
             <table className="dt">
               <thead>
@@ -2159,7 +2264,7 @@ export default function ListView({ cfg, slug }) {
                                     key={a}
                                     className="act-btn bg-[#2b7fd4]"
                                     title="View"
-                                    onClick={() => cfg.viewModal ? setViewRow(row) : router.push(base + "/" + row._id)}
+                                    onClick={() => (cfg.viewModal || cfg.viewModalRender) ? setViewRow(row) : router.push(base + "/" + row._id)}
                                   >
                                     <Icon name="eye" size={12} />
                                   </button>
@@ -2260,6 +2365,26 @@ export default function ListView({ cfg, slug }) {
           </div>
         </div>
       </div>
+      {/* A SCREEN'S OWN VIEW POPUP. cfg.viewModal above is the Goods Received
+          Return preview and is written around that document's own fields -
+          vendor, GRT number - so it cannot show anything else. Rather than
+          teach it a second shape, a screen can hand over a renderer and draw
+          the panel itself; Stock Adjustments does.
+
+          Only the backdrop is shared. Clicking it closes, and a click inside
+          is stopped so the panel does not close under the operator's own
+          hands. Lists that set neither keep routing to their [id] page. */}
+      {viewRow && cfg.viewModalRender && (
+        <div
+          className="fixed inset-0 z-50 flex items-start justify-center overflow-y-auto bg-black/40 p-4"
+          onMouseDown={() => setViewRow(null)}
+        >
+          <div className="my-4 w-full max-w-6xl" onMouseDown={(e) => e.stopPropagation()}>
+            {cfg.viewModalRender(viewRow, state.labels, () => setViewRow(null))}
+          </div>
+        </div>
+      )}
+
       {viewRow && cfg.viewModal && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4" onMouseDown={() => setViewRow(null)}>
           <div className="max-h-[90vh] w-full max-w-6xl overflow-auto rounded-lg bg-white shadow-xl" onMouseDown={(event) => event.stopPropagation()}>

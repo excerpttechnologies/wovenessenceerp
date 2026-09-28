@@ -1,5 +1,40 @@
 # Changes
 
+## 28-09-2026
+
+### NEW
+
+- models/LoyaltyLedger.js
+- lib/loyalty.js
+- app/api/loyalty/route.js
+- components/StockAdjustmentView.jsx
+
+### EXISTING
+
+- components/PosTill.jsx
+- app/api/sell-pos/route.js
+- models/PosInvoice.js
+- app/admin/transaction/sell/pos/page.jsx
+- app/admin/inventory/stock-adjustment/page.jsx
+- components/ListView.jsx
+- components/Toolbar.jsx
+- components/Icon.jsx
+- components/SupplierImportPanel.jsx
+- lib/format.js
+
+## 26-09-2026
+
+### EXISTING
+
+- app/admin/transaction/intercompanysell/receivedeliverychallan/page.jsx
+- app/api/ic-delivery-challan/route.js
+- components/IcChallanForm.jsx
+- app/admin/transaction/intercompanysell/deliverychallan/page.jsx
+- components/ListView.jsx
+- components/PosTill.jsx
+- app/globals.css
+- tailwind.config.js
+
 ## 25-09-2026
 
 ### EXISTING

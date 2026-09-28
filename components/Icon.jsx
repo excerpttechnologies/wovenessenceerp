@@ -54,6 +54,12 @@ const P = {
   check: 'M5 12l4 4L19 6',
   /* stock going back the way it came - returns, on the transfer screens */
   undo: 'M4 9h11a5 5 0 010 10h-6M4 9l4-4M4 9l4 4',
+  /* a tick INSIDE a ring - "settled", against a figure. The bare `check`
+     above is an action ("approve this"); this one is a state, and the ring is
+     what makes it read as a stamp on the amount rather than a button next to
+     it. Two subpaths in one string: the circle, drawn as two arcs, then the
+     tick. The renderer below emits a single <path>, which takes both. */
+  checkCircle: 'M12 21a9 9 0 100-18 9 9 0 000 18zM8.25 12.25l2.5 2.5 5-5.5',
 };
 
 export default function Icon({ name, size = 18, className = '', stroke = 1.7 }) {

@@ -204,7 +204,16 @@ function Modal({ title, onClose, children, wide, headerAction }) {
   );
 }
 
-export default function SupplierImportPanel({ data = {}, labels = {}, onApply }) {
+/* `subject` is the word this panel calls the record it is filling. It exists
+   because the POS till's Add Customer dialog reuses this panel whole, and a
+   dialog headed "Import Supplier Data" while adding a customer reads like the
+   wrong screen opened. It changes wording only - the parsing, the field map
+   and the Excel reader are the same for both.
+
+   Defaulting to 'Supplier' keeps the three supplier call sites reading exactly
+   as they did. */
+export default function SupplierImportPanel({ data = {}, labels = {}, onApply, subject = 'Supplier' }) {
+  const lower = subject.toLowerCase();
   const [mode, setMode] = useState(null);          // 'gst' | 'excel' | null
   const [paste, setPaste] = useState('');
   const [busy, setBusy] = useState(false);
@@ -291,11 +300,11 @@ export default function SupplierImportPanel({ data = {}, labels = {}, onApply })
          user, so the first data row is the one being edited */
       const { values, unmapped } = mapExcelRow(headers, rows[0]);
       if (!Object.keys(values).length) {
-        setError('None of the column headings matched a supplier field. Expected headings such as Supplier Name, GSTIN, Address, City, State, Pincode.');
+        setError('None of the column headings matched a ' + lower + ' field. Expected headings such as Name, GSTIN, Address, City, State, Pincode.');
         return;
       }
       const context = rows.length > 1
-        ? [['Note', `The sheet has ${rows.length} rows; the first one is shown. Import the rest from the supplier list.`]]
+        ? [['Note', `The sheet has ${rows.length} rows; the first one is shown. Import the rest from the ${lower} list.`]]
         : [];
       openReview('Excel', values, context, unmapped);
     } catch (e) {
@@ -315,7 +324,7 @@ export default function SupplierImportPanel({ data = {}, labels = {}, onApply })
   return (
     <div className="mb-4">
       <div className="mb-3 flex items-center border-b border-line bg-[#f7f9fc] px-3 py-2">
-        <span className="text-[14px] font-bold">Import Supplier Data</span>
+        <span className="text-[14px] font-bold">Import {subject} Data</span>
       </div>
       <div className="flex flex-wrap gap-2 px-3">
         <button type="button" className="btn" onClick={() => { setMode('gst'); setError(''); }}>
@@ -333,7 +342,7 @@ export default function SupplierImportPanel({ data = {}, labels = {}, onApply })
         {/* Paste box. Parsing is local and applies the mapped fields directly. */}
         {mode === 'gst' && (
         <Modal
-          title="Import Supplier From GST"
+          title={'Import ' + subject + ' From GST'}
           onClose={close}
           wide
           headerAction={(
@@ -356,7 +365,7 @@ export default function SupplierImportPanel({ data = {}, labels = {}, onApply })
           <div className="flex-1 overflow-y-auto p-5">
             <p className="mb-3 text-[13px] text-inkmuted">
               Copy the complete taxpayer details from the GST portal and paste them below.
-              The system will automatically identify and populate the matching supplier information.
+              The system will automatically identify and populate the matching {lower} information.
             </p>
             <textarea
               value={paste}
@@ -439,7 +448,7 @@ export default function SupplierImportPanel({ data = {}, labels = {}, onApply })
 
             {review.unmapped?.length > 0 && (
               <p className="mt-3 text-[12px] text-inkmuted">
-                Ignored columns: {review.unmapped.join(', ')} - no matching supplier field.
+                Ignored columns: {review.unmapped.join(', ')} - no matching {lower} field.
               </p>
             )}
           </div>

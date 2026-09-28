@@ -17,6 +17,10 @@ import { barcodeKey, sameBarcode } from '@/lib/barcodeValue';
 import { handler } from '@/lib/apiError';
 import { requirePermission, PERMISSIONS } from '@/lib/rbac';
 import { screenDenial, SCREENS, ACTIONS as PERM } from '@/lib/screenPermission';
+import LoyaltyLedger from '@/models/LoyaltyLedger';
+import {
+  loyaltyRules, pointsBalance, allowedRedemption, redemptionValue, saleLedgerRows,
+} from '@/lib/loyalty';
 
 /* Permission gate for this screen.
 
@@ -163,6 +167,70 @@ export const POST = handler(async (req) => {
   doc.shipping = Number(body.data?.shipping || 0);
   doc.totalAmount = Number(body.data?.totalAmount || 0);
   doc.paid = Number(body.data?.paid || 0);
+
+  /* ------------------------------------------------------------------
+     LOYALTY POINTS.
+
+     The till sends how many points the customer wants to spend; the SERVER
+     decides how many they may. Everything below is recomputed here from the
+     ledger and the master - the request's own figure is only ever used as a
+     ceiling, never as an answer. A till with a stale balance, or a second
+     counter that spent the same points a moment ago, is refused rather than
+     allowed to overdraw.
+
+     Off unless the business has an active Loyalty Point master, and never
+     for a walk-in: points belong to a named customer. Both of those leave
+     every line below at zero, which is the sale exactly as it behaved before
+     any of this existed.
+     ------------------------------------------------------------------ */
+  const rules = await loyaltyRules(doc.businessId);
+  const wantsPoints = Math.max(0, Math.floor(Number(body.data?.loyaltyRedeemPoints || 0)));
+
+  let redeemPoints = 0;
+  let redeemAmount = 0;
+
+  if (rules && doc.customerId && wantsPoints > 0) {
+    const balance = await pointsBalance({ businessId: doc.businessId, customerId: doc.customerId });
+    const allowed = allowedRedemption({ rules, balance, billAmount: doc.totalAmount });
+
+    /* Asked for more than the rules or the balance permit. Refused outright
+       rather than quietly trimmed: the customer has been told a price, and a
+       till that silently takes fewer points than it showed sends them away
+       having paid more than the screen said. */
+    if (wantsPoints > allowed.points) {
+      return json({
+        error: allowed.reason
+          || `Only ${allowed.points} of the ${wantsPoints} points asked for can be redeemed on this bill.`,
+        code: 'LOYALTY_NOT_AVAILABLE',
+        allowedPoints: allowed.points,
+        balance,
+      }, 409);
+    }
+
+    redeemPoints = wantsPoints;
+    redeemAmount = redemptionValue(rules, redeemPoints);
+  }
+
+  /* Points are a PAYMENT, not a discount. totalAmount stays the value of the
+     goods - which is what the tax on the bill was worked out from, and what
+     a return has to credit - and the points settle part of it, exactly as
+     cash would. So a 1000 bill met with 300 points leaves 700 to collect. */
+  doc.loyaltyPointsRedeemed = redeemPoints;
+  doc.loyaltyAmount = redeemAmount;
+
+  if (redeemAmount > 0) {
+    doc.paid = Number(doc.paid || 0) + redeemAmount;
+    doc.payments = [
+      ...(Array.isArray(doc.payments) ? doc.payments : []),
+      {
+        method: rules.name || 'Loyalty Points',
+        amount: redeemAmount,
+        note: `${redeemPoints} points`,
+        loyalty: true,
+      },
+    ];
+  }
+
   doc.sellDue = Math.max(0, doc.totalAmount - doc.paid);
   doc.paymentStatus = doc.sellDue === 0 ? 'Paid' : doc.paid > 0 ? 'Part Paid' : 'Unpaid';
 
@@ -218,6 +286,46 @@ export const POST = handler(async (req) => {
     }
 
     const [invoice] = await PosInvoice.create([doc], dbSession ? { session: dbSession } : {});
+
+    /* POINTS MOVE WITH THE BILL, in this same transaction. A sale that rolls
+       back must not leave a customer's balance spent or credited, and points
+       earned against an invoice that does not exist can never be explained.
+
+       saleLedgerRows works the earning out on what was actually PAID - the
+       bill less whatever the points just took off it - so spending points
+       cannot itself earn more of them.
+
+       Written straight to the collection rather than through a helper that
+       re-reads: everything was decided above, under the same rules, and the
+       rows are the record of that decision. */
+    if (rules && doc.customerId) {
+      const ledgerRows = saleLedgerRows({
+        rules,
+        businessId: doc.businessId,
+        locationId: doc.locationId,
+        customerId: doc.customerId,
+        invoiceId: invoice._id,
+        invoiceNo: invoice.invoiceNo,
+        billAmount: doc.totalAmount,
+        redeemPoints,
+        createdBy: session?.name || session?.email || '',
+      });
+
+      if (ledgerRows.length) {
+        await LoyaltyLedger.create(ledgerRows, dbSession ? { session: dbSession } : {});
+        const earnedRow = ledgerRows.find((r) => r.points > 0);
+        /* stamped on the invoice too, so the bill can say what it gave
+           without the ledger having to be joined to read it */
+        if (earnedRow) {
+          await PosInvoice.updateOne(
+            { _id: invoice._id },
+            { $set: { loyaltyPointsEarned: earnedRow.points } },
+            dbSession ? { session: dbSession } : {}
+          );
+          invoice.loyaltyPointsEarned = earnedRow.points;
+        }
+      }
+    }
 
     /* The write that was missing entirely: without it a barcode stayed in
        stock after being billed and could be sold again from another till. */

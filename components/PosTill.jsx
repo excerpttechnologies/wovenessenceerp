@@ -9,6 +9,7 @@ import ProductImage from '@/components/ProductImage';
 import { useScanner, useBarcodeLookup, useScanSound } from '@/components/useScanner';
 import { useOptions } from '@/components/useOptions';
 import MultiplePayDialog from '@/components/MultiplePayDialog';
+import SupplierImportPanel from '@/components/SupplierImportPanel';
 
 const PAYMENT_MODES = ['Cash', 'Credit', 'Export', 'COD'];
 /* Kept in step with the same list in components/MultiplePayDialog.jsx,
@@ -46,8 +47,16 @@ const retailFirst = (types) => (
 
 const money = (value) => Number(value || 0).toFixed(2);
 const customerLabel = (customer) => {
-  const name = [customer.businessName, customer.firstName, customer.middleName, customer.lastName]
+  const business = String(customer.businessName || '').trim();
+  const person = [customer.firstName, customer.middleName, customer.lastName]
     .filter(Boolean).join(' ').trim();
+  /* A REGISTERED customer is saved with its business name in both places -
+     the master requires a first name and that dialog shows no Name box, so
+     the business name stands in for it. Joining the two blindly printed
+     "LABH FASHIONS LABH FASHIONS". Compared case-insensitively because the
+     app upper-cases what it displays but stores what was typed. */
+  const repeat = business && person.toLowerCase() === business.toLowerCase();
+  const name = [business, repeat ? '' : person].filter(Boolean).join(' ').trim();
   return [name || 'Unnamed Customer', customer.billingMobile].filter(Boolean).join(' - ');
 };
 
@@ -167,6 +176,56 @@ const BILLING_ROWS = [
   ['billingWebsiteUrl', 'Website URL'],
 ];
 
+/* Names for the boxes the import can fill, used by the Excel preview table so
+   it can say "City" rather than "billingCity". Only the keys the panel is able
+   to produce need an entry. */
+const IMPORT_LABELS = {
+  gstNo: 'GST No', businessName: 'Business Name', shortName: 'Short Name',
+  businessType: 'Business Type', firstName: 'Name',
+  billingAddressLine1: 'Address Line 1', billingAddressLine2: 'Address Line 2',
+  billingCity: 'City', billingDistrict: 'District', billingState: 'State',
+  billingTaluk: 'Taluk', billingZipCode: 'Zip Code', billingCountry: 'Country',
+  billingMobile: 'Mobile', billingAlternateContactNumber: 'Alternate Contact',
+  billingLandline: 'Landline', billingFax: 'Fax',
+  billingEmail: 'Email', billingEmail2: 'Email 2', billingWebsiteUrl: 'Website URL',
+};
+
+/* The panel is written against the SUPPLIER form, which has boxes this dialog
+   does not, so what it hands back is translated before it is applied.
+
+   Two things have to happen, and both are about not writing a value the form
+   cannot show:
+
+   1. UNKNOWN KEYS ARE DROPPED. The panel fills pan, gstRegDate, gstType and
+      half a dozen other GST fields that only the supplier master holds. The
+      server would drop them anyway - QUICK_FIELDS in app/api/customer/route.js
+      is a whitelist - but leaving them in the form's state means the dialog is
+      carrying values it never shows and cannot save, which is how a field
+      quietly goes missing later.
+
+   2. BUSINESS TYPE IS RE-READ. The panel maps the portal's Constitution of
+      Business to the supplier dropdown's options - Proprietorship, LLP,
+      Private Limited and so on. THIS dialog offers two, Registered and
+      Un-Registered, so any of those would leave a required select showing
+      blank. A pasted GST result means the customer is registered by
+      definition, so that is what it is set to; without a GSTIN the operator's
+      own choice is left alone.
+
+   Everything else passes through untouched - the billing block lines up key
+   for key, including the four boxes this dialog hides but still submits. */
+const translateImport = (patch, blank) => {
+  const out = {};
+  Object.entries(patch).forEach(([key, value]) => {
+    if (!(key in blank)) return;
+    out[key] = value;
+  });
+  if (out.businessType !== undefined) {
+    delete out.businessType;
+  }
+  if (String(patch.gstNo || '').trim()) out.businessType = 'Registered';
+  return out;
+};
+
 function CustomerForm({ values, setValues, typeOptions, onClose, onSave, saving }) {
   const set = (key, value) => setValues((current) => ({ ...current, [key]: value }));
   const text = (key, label, required) => (
@@ -184,6 +243,24 @@ function CustomerForm({ values, setValues, typeOptions, onClose, onSave, saving 
           <button type="button" aria-label="Close" onClick={onClose}><Icon name="x" size={18} /></button>
         </div>
 
+        {/* SAME PANEL AS THE SUPPLIER FORM, not a copy of it - one GST parser
+            and one Excel reader, so a fix to either reaches both screens.
+
+            Every control inside it is type="button", which matters here in a
+            way it does not on the supplier page: this dialog IS a form, and a
+            bare button would submit the customer instead of opening the
+            importer. Its own modals sit at z-[80], above this dialog's
+            z-[60], so the paste box is not trapped behind it. */}
+        <SupplierImportPanel
+          subject="Customer"
+          data={values}
+          labels={IMPORT_LABELS}
+          onApply={(patch) => setValues((current) => ({
+            ...current,
+            ...translateImport(patch, CUSTOMER_DEFAULTS),
+          }))}
+        />
+
         <div className="grid grid-cols-1 gap-x-4 gap-y-2 md:grid-cols-4">
           <label className="f-label">Type *<select className="f-input" value={values.typeId} onChange={(e) => set('typeId', e.target.value)} required>
             <option value="">Select...</option>{typeOptions.map((o) => <option key={o.value} value={o.value}>{o.label}</option>)}
@@ -191,8 +268,20 @@ function CustomerForm({ values, setValues, typeOptions, onClose, onSave, saving 
           <label className="f-label">Business Type *<select className="f-input" value={values.businessType} onChange={(e) => set('businessType', e.target.value)} required>
             <option>Registered</option><option>Un-Registered</option>
           </select></label>
-          {text('gstNo', 'GST NO (ex: 22AAAAA0000A1Z5)')}
-          {text('businessName', 'Business Name')}
+          {/* GST NO and BUSINESS NAME belong to a REGISTERED customer, so they
+              are shown only when Business Type says so. An un-registered
+              walk-in has neither, and two boxes that can never be filled are
+              two boxes in the way of a sale.
+
+              Their values are NOT cleared here. Switching the dropdown is one
+              click and easily a mis-click, and wiping an imported GSTIN and
+              business name on the way past would mean pasting the portal
+              result again; flipping back to Registered brings them straight
+              back. What must not happen is SAVING them against a customer
+              marked un-registered, and that is handled once at the point of
+              save - see saveCustomer. */}
+          {values.businessType === 'Registered' && text('gstNo', 'GST NO (ex: 22AAAAA0000A1Z5)')}
+          {values.businessType === 'Registered' && text('businessName', 'Business Name *', true)}
           {/* Short Name is hidden, not removed - it stays in CUSTOMER_DEFAULTS
               and is still submitted, and the full Customer master screen still
               shows it. Same call as State / Country / District / Taluk / Fax
@@ -220,9 +309,27 @@ function CustomerForm({ values, setValues, typeOptions, onClose, onSave, saving 
     <option>Fr.</option>
     <option>M/s.</option>
           </select></label>
-          {text('firstName', 'First Name *', true)}
-          {text('middleName', 'Middle Name')}
-          {text('lastName', 'Last Name')}
+          {/* ONE NAME BOX, not three. The counter is told a name - "Sagar
+              Kumar" - and is not in a position to decide which part of it is a
+              middle name; three boxes made that guess the operator's problem
+              and slowed down a dialog that opens mid-sale.
+
+              Everything typed goes into firstName, and middleName / lastName
+              stay blank. Nothing downstream has to change for that: every
+              place that shows a customer's name joins the three parts with a
+              space and drops the empty ones - customerLabel above, the same
+              composition in the Customer master and on the invoice - so a
+              whole name in the first part reads back exactly as typed.
+
+              They are still declared in CUSTOMER_DEFAULTS and still submitted,
+              blank, because the Customer master screen keeps all three boxes
+              and a record saved here has to open there without gaps. */}
+          {/* NAME is who an UN-REGISTERED walk-in is. A registered customer is
+              identified by its business - LABH FASHIONS, not the person at the
+              counter - so the box is put away and Business Name above carries
+              the required star instead. Exactly one identity field is asked
+              for in either state, never none and never both. */}
+          {values.businessType !== 'Registered' && text('firstName', 'Name *', true)}
           <label className="f-label">DOB<input className="f-input" type="date" value={values.dob || ''} onChange={(e) => set('dob', e.target.value)} /></label>
           <label className="f-label">Gender<select className="f-input" value={values.gender || ''} onChange={(e) => set('gender', e.target.value)}>
             <option value="">--Select Gender--</option><option>Male</option><option>Female</option><option>Other</option>
@@ -831,6 +938,8 @@ export default function PosTill() {
      other - which is how a "cleared" screen keeps the last customer. */
   function clearTill() {
     setItems([]);
+    /* the next bill is a different bill, and may be a different customer */
+    setRedeemPoints(0);
     setSelectedProduct(null);
     setCustomer('walkin');
     setSelectedCustomer(null);
@@ -883,8 +992,31 @@ export default function PosTill() {
     event.preventDefault();
     if (!customerForm.typeId) { setMsg('Create a customer type in Customer Type master first.'); return; }
     setSavingCustomer(true);
+
+    /* A GSTIN on a customer marked un-registered is a contradiction, and a
+       business name the operator cannot see is worse than none - it would
+       still lead the customer picker, which reads businessName first.
+
+       Dropped HERE rather than when the dropdown changes, so the two boxes
+       survive a mis-click while the dialog is open and only the saved record
+       is held to the rule. */
+    /* firstName is req:true on the customer master (app/admin/contact/
+       customer/tabs.js), and a registered customer has no Name box on screen
+       to fill it from - so the business name stands in as the name. Without
+       this the save comes back 422 against a field the operator cannot see.
+
+       customerLabel drops the repeat when it builds the picker's text, so the
+       customer reads as "LABH FASHIONS", not as it twice. */
+    const data = customerForm.businessType === 'Registered'
+      ? {
+        ...customerForm,
+        firstName: String(customerForm.firstName || '').trim()
+          || String(customerForm.businessName || '').trim(),
+      }
+      : { ...customerForm, gstNo: '', businessName: '' };
+
     try {
-      const response = await fetch('/api/customer', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ business, quick: true, data: customerForm }) });
+      const response = await fetch('/api/customer', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ business, quick: true, data }) });
       const data = await response.json();
       if (!response.ok) throw new Error(data.errors ? Object.values(data.errors).join(', ') : data.error || 'Unable to save customer');
       const savedCustomer = { ...customerForm, contactId: data.customer?.contactId || '', _id: data.id };
@@ -980,6 +1112,78 @@ export default function PosTill() {
 
 
 
+  /* ------------------------------------------------------------------
+     LOYALTY POINTS.
+
+     Three things, all of which stay at nothing unless the business has an
+     active Loyalty Point master AND a named customer is on the bill: what
+     they hold, how much of it this bill may take, and how many the cashier
+     has chosen to spend.
+
+     The server decides all of it again on save. This is the screen agreeing
+     with the customer, not the authority on their balance - another counter
+     may have spent the same points while this bill was being rung up, and
+     that is refused there. See app/api/sell-pos/route.js.
+     ------------------------------------------------------------------ */
+  const [loyalty, setLoyalty] = useState(null);
+  const [redeemPoints, setRedeemPoints] = useState(0);
+
+  useEffect(() => {
+    if (!business) { setLoyalty(null); return undefined; }
+
+    let off = false;
+    const qs = new URLSearchParams({
+      business,
+      customer: customer === 'walkin' ? '' : customer,
+      amount: String(netAmount || 0),
+    });
+
+    fetch('/api/loyalty?' + qs, { cache: 'no-store' })
+      .then((r) => r.json())
+      .then((d) => { if (!off) setLoyalty(d && d.active ? d : null); })
+      .catch(() => { if (!off) setLoyalty(null); });
+
+    return () => { off = true; };
+  }, [business, customer, netAmount]);
+
+  /* A choice cannot outlive what allows it. Switching customer, emptying the
+     bill or discounting it below the redemption minimum all change what may
+     be spent, and a figure left over from the previous state would be refused
+     on save with a message the cashier has no way to connect to what they
+     did. Trimmed rather than cleared, so a smaller allowance keeps as much of
+     the intent as it can. */
+  const maxRedeem = loyalty ? Number(loyalty.allowedPoints || 0) : 0;
+  useEffect(() => {
+    setRedeemPoints((current) => (current > maxRedeem ? maxRedeem : current));
+  }, [maxRedeem]);
+
+  const redeemAmount = loyalty ? redeemPoints * Number(loyalty.pointsToInr || 0) : 0;
+  /* what the customer actually hands over */
+  const payableAfterPoints = Math.max(0, netAmount - redeemAmount);
+
+  /* WHAT THIS BILL WILL EARN - shown before it is rung up, so the cashier can
+     answer "how many will I get" without guessing.
+
+     The same arithmetic as pointsEarnedFor in lib/loyalty.js, on the rules the
+     API hands over. A PREVIEW ONLY: the server works it out again from the
+     master when the sale is saved, and its figure is the one that lands in the
+     ledger. Worked on the payable rather than the bill, because spending
+     points does not earn more of them. */
+  const earnPreview = (() => {
+    if (!loyalty || customer === 'walkin') return 0;
+    const pct = Number(loyalty.earningPercentage || 0);
+    if (pct <= 0 || payableAfterPoints <= 0) return 0;
+    const min = Number(loyalty.minPurchaseAmount || 0);
+    if (min > 0 && payableAfterPoints < min) return 0;
+    const cap = Number(loyalty.maxRewardPoint || 0);
+    const points = Math.floor((payableAfterPoints * pct) / 100);
+    return Math.max(0, cap > 0 ? Math.min(points, cap) : points);
+  })();
+
+  const balanceAfterBill = loyalty
+    ? Math.max(0, Number(loyalty.balance || 0) - redeemPoints + earnPreview)
+    : 0;
+
   const timeStr = now ? now.toTimeString().slice(0, 5) : '';
 
   async function submitPayment(paymentData) {
@@ -987,7 +1191,7 @@ export default function PosTill() {
     try {
       const paid = paymentData.payments.reduce((sum, payment) => sum + Number(payment.amount || 0), 0);
       const customerRecord = selectedCustomer || customerOptions.find((option) => option.value === customer)?.customer;
-      const response = await fetch('/api/sell-pos', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ business, location, finYear, data: { date: saleDate, finYear, customerId: customer === 'walkin' ? null : customer, customerContact: customerRecord?.billingMobile || '', customerSnapshot: customer === 'walkin' ? null : customerRecord || null, counterId: counter || null, billingType: payMode, exempted: 'NO', items, payments: paymentData.payments, sellNote: paymentData.sellNote, staffNote: paymentData.staffNote, shipping: Number(shipping || 0), totalAmount: netAmount, paid } }) });
+      const response = await fetch('/api/sell-pos', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ business, location, finYear, data: { date: saleDate, finYear, customerId: customer === 'walkin' ? null : customer, customerContact: customerRecord?.billingMobile || '', customerSnapshot: customer === 'walkin' ? null : customerRecord || null, counterId: counter || null, billingType: payMode, exempted: 'NO', items, payments: paymentData.payments, sellNote: paymentData.sellNote, staffNote: paymentData.staffNote, shipping: Number(shipping || 0), totalAmount: netAmount, paid, /* the server re-reads the balance and the master and decides for itself; this is the request, not the ruling */ loyaltyRedeemPoints: redeemPoints } }) });
       const data = await response.json();
       if (!response.ok) throw new Error(data.error || 'Unable to save POS invoice');
       setShowMultiplePay(false);
@@ -1018,7 +1222,7 @@ export default function PosTill() {
           "Loading history..." for a moment. */}
       {previewImage && <div className={'fixed inset-0 z-[70] flex items-center justify-center bg-black/75 p-6' + (previewImage.hover ? ' pointer-events-none' : '')} onClick={() => setPreviewImage(null)}><div className="relative max-h-[70vh] max-w-2xl rounded bg-white p-2 shadow-2xl" onClick={(e) => e.stopPropagation()}>{!previewImage.hover && <button type="button" aria-label="Close image preview" className="absolute right-2 top-2 z-10 flex h-8 w-8 items-center justify-center rounded-full bg-black/70 text-white" onClick={() => setPreviewImage(null)}><Icon name="x" size={16} /></button>}<img src={previewImage.src} alt={previewImage.alt} className="max-h-[65vh] max-w-[60vw] object-contain" /></div></div>}
       {msg && <div className="mx-4 mt-2 flash flash-err">{msg}</div>}
-      <div className="mt-3 flex-1 overflow-x-auto px-4"><table className="dt"><thead><tr>{['#', 'Barcode No', 'Stock Issue', 'Stock Addition', 'Item Code', 'Print Description', 'HSN', 'GST%', 'Qty', 'RSP Price', 'Disc %', 'Disc Amt', 'Line Total', 'Sales Person', 'Image', ''].map((heading) => <th key={heading} className={'!whitespace-normal !leading-tight' + (heading === '#' ? ' !w-9 !px-1.5 !text-left' : '')}>{heading}</th>)}</tr></thead><tbody>{rows.length === 0 ? <tr><td colSpan="16" className="dt-empty">No Items Added</td></tr> : rows.map((row, index) => <tr key={`${row.itemId}-${index}`} className="cursor-pointer !bg-[#FFF3CD]" onClick={() => setSelectedProduct(row)}><td className={'!w-9 !px-1.5 !text-left'}>{index + 1}</td><td className={row.isReturn ? '!text-danger font-semibold' : undefined}>{row.barcode || '-'}</td><td><input type="checkbox" checked={!!row.stockIssue} onClick={(e) => e.stopPropagation()} onChange={(e) => setStockFlag(index, 'stockIssue', e.target.checked)} /></td><td><input type="checkbox" checked={!!row.stockAddition} onClick={(e) => e.stopPropagation()} onChange={(e) => setStockFlag(index, 'stockAddition', e.target.checked)} /></td><td>{row.code}</td><td>{row.description || row.name}</td><td>{row.hsn}</td><td>{money(row.gst)}</td><td>{(() => { const closing = row.closing; const known = closing !== undefined && closing !== null; const over = known && Number(row.qty || 0) > Number(closing); return (<div className="flex flex-col items-center gap-0.5" onClick={(e) => e.stopPropagation()}><div className="flex items-center justify-center gap-1"><button type="button" aria-label="Decrease quantity" className="inline-flex h-[26px] w-[26px] shrink-0 items-center justify-center rounded border border-line bg-pillgrey text-[15px] font-bold leading-none text-ink hover:bg-linestrong disabled:opacity-40" disabled={Number(row.qty || 0) <= 1} onClick={() => updateItem(index, 'qty', Math.max(1, Number(row.qty || 1) - 1))}>-</button><input data-qty-row={index} className={'f-input w-14 text-center' + (over ? ' border-danger text-danger' : '')} type="number" min="1" max={known ? closing : undefined} value={row.qty} onWheel={(e) => e.currentTarget.blur()} onFocus={() => updateItem(index, 'qty', '')} /* min="1" only limits the spinner - a negative can still be typed or pasted, and it flips the whole bill: -222 x 600 billed -133,200.00. Anything below 1 becomes 1. '' is kept so the box can be cleared and retyped, which is what onFocus above relies on. */ onChange={(e) => { const v = e.target.value; updateItem(index, 'qty', v === '' ? '' : (Number(v) < 1 ? 1 : v)); }} /><button type="button" aria-label="Increase quantity" className="inline-flex h-[26px] w-[26px] shrink-0 items-center justify-center rounded border border-line bg-pillgrey text-[15px] font-bold leading-none text-ink hover:bg-linestrong disabled:opacity-40" disabled={known && Number(row.qty || 0) >= Number(closing)} onClick={() => updateItem(index, 'qty', Number(row.qty || 0) + 1)}>+</button></div>{known && <span className={'text-[11px] ' + (over ? 'font-semibold text-danger' : 'text-inkmuted')}>{over ? 'Only ' + closing + ' in stock' : 'Closing: ' + closing}</span>}</div>); })()}</td><td><input className="f-input w-24" type="number" min="0" value={row.rsp} onWheel={(e) => e.currentTarget.blur()} onChange={(e) => updateItem(index, 'rsp', e.target.value)} /></td><td><input className="f-input w-20" type="number" min="0" max="100" value={row.discountPct} onWheel={(e) => e.currentTarget.blur()} /* a discount over 100% turns the line NEGATIVE - the bill then pays the customer. Clamped here as well as with max= because max only stops the spinner, not typing or pasting. */ onChange={(e) => { const v = e.target.value; updateItem(index, 'discountPct', v === '' ? '' : Math.min(100, Math.max(0, Number(v)))); }} /></td><td>{money(row.discountAmount)}</td><td className={row.isReturn ? '!text-danger font-semibold' : undefined}>{money(row.lineTotal)}</td><td><select className="f-input min-w-35" value={row.salesPerson || ''} onChange={(e) => updateItem(index, 'salesPerson', e.target.value)}><option value="">Select...</option>{salesPeople.map((person) => <option key={person.value} value={person.value}>{person.label}</option>)}</select></td><td onMouseEnter={() => row.image && setPreviewImage({ src: row.image, alt: row.name, hover: true })} onMouseLeave={() => setPreviewImage((p) => (p && p.hover ? null : p))}><ProductImage src={row.image} alt={row.name} size={56} onOpen={() => { setSelectedProduct(row); setPreviewImage({ src: row.image, alt: row.name, hover: false }); }} /></td><td><button type="button" className="act-btn bg-danger" onClick={(e) => { e.stopPropagation(); setItems((current) => current.filter((_, itemIndex) => itemIndex !== index)); if (selectedProduct?.itemId === row.itemId) setSelectedProduct(null); }}><Icon name="x" size={12} /></button></td></tr>)}</tbody></table></div>
+      <div className="mt-3 flex-1 overflow-x-auto px-4"><table className="dt"><thead><tr>{['#', 'Barcode No', 'Stock', 'Item Code', 'Print Description', 'HSN', 'GST%', 'Qty', 'RSP Price', 'Disc %', 'Disc Amt', 'Line Total', 'Sales Person', 'Image', ''].map((heading) => <th key={heading} className={'!whitespace-normal !leading-tight' + (heading === '#' ? ' !w-9 !px-1.5 !text-left' : '')}>{heading}</th>)}</tr></thead><tbody>{rows.length === 0 ? <tr><td colSpan="15" className="dt-empty">No Items Added</td></tr> : rows.map((row, index) => <tr key={`${row.itemId}-${index}`} className="cursor-pointer !bg-[#FFF3CD]" onClick={() => setSelectedProduct(row)}><td className={'!w-9 !px-1.5 !text-left'}>{index + 1}</td><td className={row.isReturn ? '!text-danger font-semibold' : undefined}>{row.barcode || '-'}</td><td>{/* ONE STOCK COLUMN, two ticks. They were two columns headed Stock Issue and Stock Addition, which read as two unrelated settings when they are one question with two answers - and the pair is already exclusive, so ticking Add clears Issue. Nothing about that changed here; this is the same two checkboxes and the same handler under one heading. The click guard moves to the wrapper so it still covers both, and now the labels too - a label click must tick the box, not select the row behind it. */}<span className="flex items-center justify-center gap-3" onClick={(e) => e.stopPropagation()}><label className="flex cursor-pointer items-center gap-1 leading-none"><input type="checkbox" checked={!!row.stockIssue} onChange={(e) => setStockFlag(index, 'stockIssue', e.target.checked)} /> Issue</label><label className="flex cursor-pointer items-center gap-1 leading-none"><input type="checkbox" checked={!!row.stockAddition} onChange={(e) => setStockFlag(index, 'stockAddition', e.target.checked)} /> Add</label></span></td><td>{row.code}</td><td>{row.description || row.name}</td><td>{row.hsn}</td><td>{money(row.gst)}</td><td>{(() => { const closing = row.closing; const known = closing !== undefined && closing !== null; const over = known && Number(row.qty || 0) > Number(closing); return (<div className="flex flex-col items-center gap-0.5" onClick={(e) => e.stopPropagation()}><div className="flex items-center justify-center gap-1"><button type="button" aria-label="Decrease quantity" className="inline-flex h-[26px] w-[26px] shrink-0 items-center justify-center rounded border border-line bg-pillgrey text-[15px] font-bold leading-none text-ink hover:bg-linestrong disabled:opacity-40" disabled={Number(row.qty || 0) <= 1} onClick={() => updateItem(index, 'qty', Math.max(1, Number(row.qty || 1) - 1))}>-</button><input data-qty-row={index} className={'f-input w-14 text-center' + (over ? ' border-danger text-danger' : '')} type="number" min="1" max={known ? closing : undefined} value={row.qty} onWheel={(e) => e.currentTarget.blur()} onFocus={() => updateItem(index, 'qty', '')} /* min="1" only limits the spinner - a negative can still be typed or pasted, and it flips the whole bill: -222 x 600 billed -133,200.00. Anything below 1 becomes 1. '' is kept so the box can be cleared and retyped, which is what onFocus above relies on. */ onChange={(e) => { const v = e.target.value; updateItem(index, 'qty', v === '' ? '' : (Number(v) < 1 ? 1 : v)); }} /><button type="button" aria-label="Increase quantity" className="inline-flex h-[26px] w-[26px] shrink-0 items-center justify-center rounded border border-line bg-pillgrey text-[15px] font-bold leading-none text-ink hover:bg-linestrong disabled:opacity-40" disabled={known && Number(row.qty || 0) >= Number(closing)} onClick={() => updateItem(index, 'qty', Number(row.qty || 0) + 1)}>+</button></div>{known && <span className={'text-[11px] ' + (over ? 'font-semibold text-danger' : 'text-inkmuted')}>{over ? 'Only ' + closing + ' in stock' : 'Closing: ' + closing}</span>}</div>); })()}</td><td><input className="f-input w-24" type="number" min="0" value={row.rsp} onWheel={(e) => e.currentTarget.blur()} onChange={(e) => updateItem(index, 'rsp', e.target.value)} /></td><td><input className="f-input w-20" type="number" min="0" max="100" value={row.discountPct} onWheel={(e) => e.currentTarget.blur()} /* a discount over 100% turns the line NEGATIVE - the bill then pays the customer. Clamped here as well as with max= because max only stops the spinner, not typing or pasting. */ onChange={(e) => { const v = e.target.value; updateItem(index, 'discountPct', v === '' ? '' : Math.min(100, Math.max(0, Number(v)))); }} /></td><td>{money(row.discountAmount)}</td><td className={row.isReturn ? '!text-danger font-semibold' : undefined}>{money(row.lineTotal)}</td><td><select className="f-input min-w-35" value={row.salesPerson || ''} onChange={(e) => updateItem(index, 'salesPerson', e.target.value)}><option value="">Select...</option>{salesPeople.map((person) => <option key={person.value} value={person.value}>{person.label}</option>)}</select></td><td onMouseEnter={() => row.image && setPreviewImage({ src: row.image, alt: row.name, hover: true })} onMouseLeave={() => setPreviewImage((p) => (p && p.hover ? null : p))}><ProductImage src={row.image} alt={row.name} size={56} onOpen={() => { setSelectedProduct(row); setPreviewImage({ src: row.image, alt: row.name, hover: false }); }} /></td><td><button type="button" className="act-btn bg-danger" onClick={(e) => { e.stopPropagation(); setItems((current) => current.filter((_, itemIndex) => itemIndex !== index)); if (selectedProduct?.itemId === row.itemId) setSelectedProduct(null); }}><Icon name="x" size={12} /></button></td></tr>)}</tbody></table></div>
       
       <div className="border-t border-line px-4 pt-2"><div className="grid grid-cols-2 gap-2 text-[13px] md:grid-cols-6"><div><div className="text-cell">Qty</div><div>{qty}</div></div><div><div className="text-cell">Bill Value</div><div>{money(rows.reduce((sum, row) => sum + (row.isReturn ? -1 : 1) * Number(row.rsp || 0) * Number(row.qty || 0), 0))}</div></div><div><div className="text-cell">Total Discount</div><div>{money(rows.reduce((sum, row) => sum + row.discountAmount, 0))}</div></div><div><div className="text-cell">Sub Total</div><div>{money(billValue)}</div></div>
       
@@ -1029,9 +1233,82 @@ export default function PosTill() {
       {/* new code without tax add on top of bill value */}
       <div><div className="text-cell">Taxable Amt</div><div>{money(taxableAmount)}</div><div className="text-[11px] text-danger">Tax: {money(tax)} (inclusive)</div></div>
       
-      <div><div className="text-cell">Net Amount</div><div className="font-bold text-danger">{money(netAmount)}</div></div></div><div className="mt-2 grid grid-cols-2 gap-2 text-[13px] md:grid-cols-6"><div><div className="text-cell">Line Wise Discount %</div><input className="f-input" type="number" min="0" max="100" step="0.01" value={lineDiscPct} onWheel={(e) => e.currentTarget.blur()} onChange={(e) => applyLineDiscountPct(e.target.value)} /></div><div><div className="text-cell">Line Wise Discount Amt</div><input className="f-input" type="number" min="0" step="0.01" value={lineDiscAmt} onWheel={(e) => e.currentTarget.blur()} onChange={(e) => applyLineDiscountAmt(e.target.value)} /></div><div className="flex items-center gap-2"><span className="text-cell">Shipping</span><button type="button" className="font-semibold text-brand underline" onClick={() => { setShippingDraft(String(shipping || 0)); setShowShipping(true); }}>( + ) {money(shipping)}</button></div></div></div>
-      <div className="mt-2 flex flex-wrap items-center gap-3 bg-[#eef1f7] px-4 py-3"><button type="button" className="btn bg-[#17a2b8] text-white disabled:opacity-50" disabled={holding} onClick={holdBill}><Icon name="register" size={14} /> {holding ? 'Holding...' : 'Hold'}</button><button type="button" className="btn bg-[#6b7280] text-white disabled:opacity-50" disabled={!holds.length} onClick={() => setShowHolds(true)}><Icon name="register" size={14} /> Held ({holds.length})</button><button type="button" className="btn bg-[#2563a9] text-white" onClick={() => setShowMultiplePay(true)}><Icon name="register" size={14} /> Multiple Pay</button><span className="text-[15px] font-bold">Total Payable: <span className="text-okgreen">{money(netAmount)}</span></span><button type="button" className="btn bg-[#f2a19b] text-white" onClick={clearTill}><Icon name="x" size={14} /> Clear Screen</button><span className="flex-1" /><button type="button" className="btn btn-primary" onClick={() => router.push('/admin/transaction/sell/pos')}>Recent Transactions</button></div>
-      {showMultiplePay && <MultiplePayDialog totalItems={qty} totalPayable={netAmount} onClose={() => setShowMultiplePay(false)} onSubmit={submitPayment} />}
+      <div><div className="text-cell">Net Amount</div><div className="font-bold text-danger">{money(netAmount)}</div></div></div><div className="mt-2 grid grid-cols-2 gap-2 text-[13px] md:grid-cols-6"><div><div className="text-cell">Line Wise Discount %</div><input className="f-input" type="number" min="0" max="100" step="0.01" value={lineDiscPct} onWheel={(e) => e.currentTarget.blur()} onChange={(e) => applyLineDiscountPct(e.target.value)} /></div><div><div className="text-cell">Line Wise Discount Amt</div><input className="f-input" type="number" min="0" step="0.01" value={lineDiscAmt} onWheel={(e) => e.currentTarget.blur()} onChange={(e) => applyLineDiscountAmt(e.target.value)} /></div><div className="flex items-center gap-2"><span className="text-cell">Shipping</span><button type="button" className="font-semibold text-brand underline" onClick={() => { setShippingDraft(String(shipping || 0)); setShowShipping(true); }}>( + ) {money(shipping)}</button></div>{/* LOYALTY, on the right of the footer - beneath Taxable Amt and Net
+              Amount, which are the other two figures that decide what is
+              collected. It fills columns 4 to 6 of this same six-column row,
+              so it lines up with the totals above instead of sitting in a band
+              of its own across the screen.
+
+              Renders only where loyalty is switched on for the business, so a
+              till that has never configured it looks exactly as it did. */}
+          {loyalty && (
+            <div className="text-[12.5px] md:col-span-3 md:justify-self-end md:text-right">
+              {customer === 'walkin' ? (
+                /* Nobody to credit. Said plainly rather than hidden, so the
+                   cashier knows the points are there to be had if they name
+                   the customer before taking the money. */
+                <span className="text-inkmuted">Select a customer to earn or redeem points.</span>
+              ) : (
+                <>
+                  <div className="flex flex-wrap items-center justify-end gap-x-3 gap-y-0.5">
+                    <span className="text-inkmuted">
+                      {loyalty.name} - Balance: <b className="text-ink">{loyalty.balance} pts</b>
+                      {Number(loyalty.balanceValue || 0) > 0 && ' (' + money(loyalty.balanceValue) + ')'}
+                    </span>
+                    {earnPreview > 0 && (
+                      <span className="text-okgreen">Earns {earnPreview} pts on this bill</span>
+                    )}
+                    {/* the sum spelled out, so the closing figure can be
+                        checked rather than taken on trust */}
+                    <span className="text-inkmuted">
+                      After bill: {loyalty.balance}
+                      {redeemPoints > 0 && ' - ' + redeemPoints}
+                      {earnPreview > 0 && ' + ' + earnPreview}
+                      {' = '}<b className="text-ink">{balanceAfterBill} pts</b>
+                    </span>
+                  </div>
+
+                  <div className="mt-1 flex flex-wrap items-center justify-end gap-2">
+                    {maxRedeem > 0 ? (
+                      <>
+                        <span className="text-cell">Redeem Pts</span>
+                        <input
+                          className="f-input h-7 w-20 py-0 text-center"
+                          type="number"
+                          min="0"
+                          max={maxRedeem}
+                          value={redeemPoints || ''}
+                          onWheel={(e) => e.currentTarget.blur()}
+                          /* clamped here as well as with max=, which only
+                             limits the spinner - typing or pasting walks
+                             straight past it */
+                          onChange={(e) => {
+                            const v = Math.floor(Number(e.target.value) || 0);
+                            setRedeemPoints(Math.min(maxRedeem, Math.max(0, v)));
+                          }}
+                        />
+                        {redeemAmount > 0 && (
+                          <span className="font-semibold text-okgreen">- {money(redeemAmount)}</span>
+                        )}
+                        <span className="text-inkmuted">(max {maxRedeem})</span>
+                        <button
+                          type="button"
+                          className="btn h-7 px-2 text-[12px]"
+                          onClick={() => setRedeemPoints(maxRedeem)}
+                        >
+                          Use all
+                        </button>
+                      </>
+                    ) : (
+                      <span className="text-inkmuted">{loyalty.reason || 'Nothing to redeem on this bill.'}</span>
+                    )}
+                  </div>
+                </>
+              )}
+            </div>
+          )}</div></div>
+      <div className="mt-2 flex flex-wrap items-center gap-3 bg-[#eef1f7] px-4 py-3"><button type="button" className="btn bg-[#17a2b8] text-white disabled:opacity-50" disabled={holding} onClick={holdBill}><Icon name="register" size={14} /> {holding ? 'Holding...' : 'Hold'}</button><button type="button" className="btn bg-[#6b7280] text-white disabled:opacity-50" disabled={!holds.length} onClick={() => setShowHolds(true)}><Icon name="register" size={14} /> Held ({holds.length})</button><button type="button" className="btn bg-[#2563a9] text-white" onClick={() => setShowMultiplePay(true)}><Icon name="register" size={14} /> Multiple Pay</button><span className="text-[15px] font-bold">Total Payable: <span className="text-okgreen">{money(payableAfterPoints)}</span>{redeemAmount > 0 && <span className="ml-2 text-[12px] font-normal text-inkmuted">(net {money(netAmount)} - loyalty {money(redeemAmount)})</span>}</span><button type="button" className="btn bg-[#f2a19b] text-white" onClick={clearTill}><Icon name="x" size={14} /> Clear Screen</button><span className="flex-1" /><button type="button" className="btn btn-primary" onClick={() => router.push('/admin/transaction/sell/pos')}>Recent Transactions</button></div>
+      {showMultiplePay && <MultiplePayDialog totalItems={qty} /* WHAT IS LEFT TO COLLECT, not the value of the goods. Redeemed points are a payment the server adds on top of whatever is taken here (see app/api/sell-pos/route.js), so handing this the full figure would have the cashier collect 1000 in cash on a 1000 bill already part-settled by 300 points - and the customer would pay 1300. */ totalPayable={payableAfterPoints} onClose={() => setShowMultiplePay(false)} onSubmit={submitPayment} />}
 
       {/* Add Shipping Charge. Save commits the draft onto the bill; closing or
           clicking the backdrop leaves the previous charge untouched. */}

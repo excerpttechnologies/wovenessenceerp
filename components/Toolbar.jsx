@@ -13,6 +13,12 @@ export default function Toolbar({
      dead, with the reason beside it, tells them what to ask for. The server
      refuses the request either way - see lib/screenPermission.js. */
   addDisabled = false, addDisabledReason = '',
+  /* An export now collects EVERY row the filter matches, which on a big
+     list is many requests and takes a moment. The three buttons go dead
+     while it runs so a second click cannot start a second collection and
+     hand back two files. Defaults false, so callers that have not been
+     told about it behave exactly as before. */
+  exporting = false,
 }) {
   const [pop, setPop] = useState(false);
 
@@ -52,9 +58,9 @@ export default function Toolbar({
             PDF red, CSV a neutral slate - so the three are told apart at a
             glance now that they carry no words. The wording stays in title and
             aria-label for the tooltip and for screen readers. */}
-        {showCsv && <button type="button" className="inline-flex h-9 w-10 items-center justify-center rounded bg-[#495464] text-white" title="Export to CSV" aria-label="Export to CSV" onClick={onExportCsv}><Icon name="file" size={16} /></button>}
-        {showExcel && <button type="button" className="inline-flex h-9 w-10 items-center justify-center rounded bg-[#1d6f42] text-white" title="Export to Excel" aria-label="Export to Excel" onClick={onExportExcel}><Icon name="grid" size={16} /></button>}
-        {showPdf && <button type="button" className="inline-flex h-9 w-10 items-center justify-center rounded bg-[#b30b00] text-white" title="Export to PDF" aria-label="Export to PDF" onClick={onExportPdf}><Icon name="printer" size={16} /></button>}
+        {showCsv && <button type="button" className="inline-flex h-9 w-10 items-center justify-center rounded bg-[#495464] text-white disabled:opacity-50" title={exporting ? "Collecting rows..." : "Export to CSV"} aria-label="Export to CSV" disabled={exporting} onClick={onExportCsv}><Icon name="file" size={16} /></button>}
+        {showExcel && <button type="button" className="inline-flex h-9 w-10 items-center justify-center rounded bg-[#1d6f42] text-white disabled:opacity-50" title={exporting ? "Collecting rows..." : "Export to Excel"} aria-label="Export to Excel" disabled={exporting} onClick={onExportExcel}><Icon name="grid" size={16} /></button>}
+        {showPdf && <button type="button" className="inline-flex h-9 w-10 items-center justify-center rounded bg-[#b30b00] text-white disabled:opacity-50" title={exporting ? "Collecting rows..." : "Export to PDF"} aria-label="Export to PDF" disabled={exporting} onClick={onExportPdf}><Icon name="printer" size={16} /></button>}
       </div>
 
       <div className="mt-3 flex flex-wrap items-center gap-2.5">

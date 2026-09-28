@@ -27,6 +27,21 @@ const PosInvoiceSchema = new mongoose.Schema(
     paid: { type: Number, default: 0 },
     sellDue: { type: Number, default: 0 },
     payments: { type: mongoose.Schema.Types.Mixed, default: [] },
+
+    /* LOYALTY POINTS on this bill. Declared here because Mongoose's strict
+       mode silently DROPS anything that is not - documents written by an
+       earlier deployment carry these three keys and this schema was throwing
+       them away on every save.
+
+       totalAmount is the goods, undiscounted. loyaltyAmount is what the
+       redeemed points took off it, and is counted as a payment rather than as
+       a discount - so a 1000 bill settled with 300 points stores
+       totalAmount 1000, loyaltyAmount 300, and 700 left for the customer.
+       The points themselves live in models/LoyaltyLedger.js; these are the
+       bill's own record of what happened. */
+    loyaltyPointsRedeemed: { type: Number, default: 0 },
+    loyaltyPointsEarned: { type: Number, default: 0 },
+    loyaltyAmount: { type: Number, default: 0 },
     sellNote: { type: String, default: '' },
     staffNote: { type: String, default: '' },
 
