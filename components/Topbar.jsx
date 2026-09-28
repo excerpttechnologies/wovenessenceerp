@@ -15,7 +15,7 @@ export default function Topbar({ onToggleSidebar }) {
           ))}
         </span> */}
         <span className="leading-none">
-          <b className="text-[17px] text-brand-logo">GROO RETAIL ERP</b>
+          <b className="text-[17px] text-brand-logo">RETAIL ERP</b>
           <span className="block text-[8.5px] text-[#7b8798]">EXCERPT TECHNOLOGIES PVT LTD</span>
         </span>
       </div>
