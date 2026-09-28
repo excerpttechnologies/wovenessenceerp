@@ -110,6 +110,23 @@ const CONFIG = {
     { label: "View Payments", icon: "ledger", to: (row) => `/admin/transaction/sell/pos/payment/${row._id}` },
     { label: "Print Invoice", icon: "printer", to: (row) => `/admin/transaction/sell/pos/print/${row._id}` },
   ],
+  /* THE BOXES ABOVE THE LIST. Filled from the endpoint's `summary`, so they
+     cover every invoice the filter matches rather than the page on screen -
+     and because they follow the filter, setting Start and End Date to one day
+     turns them into that day's takings.
+
+     Five, in the order a counter reads them: how many bills, what they came
+     to, how much of it is in hand, what is still owed, and how many pieces
+     went out. Collected and Outstanding are kept apart rather than shown as
+     one net figure, because a day can be busy and still leave money on the
+     counter - which is exactly what the two numbers together say. */
+  summaryCards: [
+    { k: 'count', label: 'Total Invoices' },
+    { k: 'totalAmount', label: 'Total Amount', f: 'amount' },
+    { k: 'paid', label: 'Collected', f: 'amount' },
+    { k: 'sellDue', label: 'Outstanding', f: 'amount' },
+    { k: 'totalQty', label: 'Qty Sold', f: 'amount' },
+  ],
   filters: [
     { k: "invoiceNo", label: "Invoice No", type: "text" },
     { k: "startDate", label: "Start Date", type: "date" },

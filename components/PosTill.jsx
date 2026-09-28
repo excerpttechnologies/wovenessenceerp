@@ -993,21 +993,28 @@ export default function PosTill() {
     if (!customerForm.typeId) { setMsg('Create a customer type in Customer Type master first.'); return; }
     setSavingCustomer(true);
 
-    /* A GSTIN on a customer marked un-registered is a contradiction, and a
+    /* WHAT IS ACTUALLY SENT, which is not quite what is on screen.
+
+       REGISTERED: firstName is req:true on the customer master (see
+       app/admin/contact/customer/tabs.js) and this dialog shows no Name box
+       for a registered customer, so the business name stands in as the name.
+       Without it the save comes back 422 against a field the operator cannot
+       see. customerLabel drops the repeat when it builds the picker's text,
+       so the customer reads as "LABH FASHIONS", not as it twice.
+
+       UN-REGISTERED: a GSTIN on such a customer is a contradiction, and a
        business name the operator cannot see is worse than none - it would
-       still lead the customer picker, which reads businessName first.
+       still lead the customer picker, which reads businessName first. Both
+       are dropped HERE rather than when the dropdown changes, so the two
+       boxes survive a mis-click while the dialog is open and only the saved
+       record is held to the rule.
 
-       Dropped HERE rather than when the dropdown changes, so the two boxes
-       survive a mis-click while the dialog is open and only the saved record
-       is held to the rule. */
-    /* firstName is req:true on the customer master (app/admin/contact/
-       customer/tabs.js), and a registered customer has no Name box on screen
-       to fill it from - so the business name stands in as the name. Without
-       this the save comes back 422 against a field the operator cannot see.
-
-       customerLabel drops the repeat when it builds the picker's text, so the
-       customer reads as "LABH FASHIONS", not as it twice. */
-    const data = customerForm.businessType === 'Registered'
+       Named `payload`, NOT `data`. The try below declares its own `data` for
+       the parsed response, and a `data` out here would sit in that block's
+       temporal dead zone - the fetch call reads it before the inner one is
+       initialised, and the dialog dies with "Cannot access 'data' before
+       initialization" before a single request is sent. */
+    const payload = customerForm.businessType === 'Registered'
       ? {
         ...customerForm,
         firstName: String(customerForm.firstName || '').trim()
@@ -1016,7 +1023,7 @@ export default function PosTill() {
       : { ...customerForm, gstNo: '', businessName: '' };
 
     try {
-      const response = await fetch('/api/customer', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ business, quick: true, data }) });
+      const response = await fetch('/api/customer', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ business, quick: true, data: payload }) });
       const data = await response.json();
       if (!response.ok) throw new Error(data.errors ? Object.values(data.errors).join(', ') : data.error || 'Unable to save customer');
       const savedCustomer = { ...customerForm, contactId: data.customer?.contactId || '', _id: data.id };

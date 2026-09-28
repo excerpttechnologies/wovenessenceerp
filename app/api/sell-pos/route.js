@@ -1,4 +1,4 @@
-import { isValidObjectId } from 'mongoose';
+import { isValidObjectId, Types } from 'mongoose';
 import dbConnect from '@/lib/db';
 import PosInvoice from '@/models/PosInvoice';
 import Business from '@/models/Business';
@@ -85,6 +85,63 @@ export async function GET(req) {
   }
 
   const total = await PosInvoice.countDocuments(filter);
+
+  /* ------------------------------------------------------------------
+     THE BOXES ABOVE THE LIST, over the WHOLE filtered set rather than the
+     page on screen. Counting the ten rows in view would report a different
+     figure on every page, which is worse than no figure at all - so this is a
+     second round trip on purpose, rather than fetching every invoice just to
+     add up five columns.
+
+     It follows the filter, so picking a Start and End Date turns these into
+     that day's takings. That is the point of them.
+
+     THE IDS HAVE TO BE CAST BY HAND. find() and countDocuments() run the
+     filter through the schema, so the id strings off the query string become
+     ObjectIds on the way; aggregate() hands the pipeline straight to the
+     driver with no casting, and the same strings never match an ObjectId
+     field - the count would be right while every total came back 0. The same
+     trap is documented on /api/ic-delivery-challan.
+     ------------------------------------------------------------------ */
+  const idFields = ['businessId', 'locationId', 'customerId', 'counterId'];
+  const matchIds = Object.fromEntries(Object.entries(filter).map(([k, v]) => (
+    idFields.includes(k) && typeof v === 'string' && isValidObjectId(v)
+      ? [k, new Types.ObjectId(v)]
+      : [k, v]
+  )));
+
+  /* Quantity is summed out of the line items, which are Mixed - a qty may be
+     stored as a number or as a string depending on how the line reached the
+     till. $convert with onError/onNull keeps a stray value from failing the
+     whole pipeline and losing every other figure with it. */
+  const [sums] = await PosInvoice.aggregate([
+    { $match: matchIds },
+    {
+      $group: {
+        _id: null,
+        totalAmount: { $sum: { $ifNull: ['$totalAmount', 0] } },
+        paid: { $sum: { $ifNull: ['$paid', 0] } },
+        sellDue: { $sum: { $ifNull: ['$sellDue', 0] } },
+        totalQty: {
+          $sum: {
+            $reduce: {
+              input: { $ifNull: ['$items', []] },
+              initialValue: 0,
+              in: {
+                $add: [
+                  '$$value',
+                  { $convert: { input: '$$this.qty', to: 'double', onError: 0, onNull: 0 } },
+                ],
+              },
+            },
+          },
+        },
+      },
+    },
+  ]);
+
+  const round2 = (v) => Math.round((Number(v) || 0) * 100) / 100;
+
   const rows = await PosInvoice.find(filter)
     .sort({ createdAt: -1 })
     .skip((page - 1) * perPage)
@@ -117,6 +174,13 @@ export async function GET(req) {
       };
     }),
     labels: await resolveRefLabels(rows),
+    summary: {
+      count: total,
+      totalAmount: round2(sums && sums.totalAmount),
+      paid: round2(sums && sums.paid),
+      sellDue: round2(sums && sums.sellDue),
+      totalQty: round2(sums && sums.totalQty),
+    },
     total,
     page,
     pages: Math.max(1, Math.ceil(total / perPage)),
