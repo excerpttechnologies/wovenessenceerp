@@ -1,5 +1,5 @@
 'use client';
-import { useCallback, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
 import Icon from './Icon';
 import ProductImage from './ProductImage';
@@ -37,6 +37,9 @@ export default function PosReturnForm() {
   const business = sp.get('business') || scope.business;
   const location = sp.get('location') || scope.location;
   const finYear = sp.get('finYear') || scope.finYear;
+  /* the customer selected on the till, when Return / Refund was pressed with
+     one on the bill - their past bills are listed below for ticking */
+  const customerId = sp.get('customer') || '';
 
   const [query, setQuery] = useState('');
   const [sale, setSale] = useState(null);
@@ -49,6 +52,10 @@ export default function PosReturnForm() {
   const [loading, setLoading] = useState(false);
   const [saving, setSaving] = useState(false);
   const [done, setDone] = useState(null);
+  /* { customer, bills } for customerId, and which bill is ticked */
+  const [history, setHistory] = useState(null);
+  const [historyError, setHistoryError] = useState('');
+  const [pickedBill, setPickedBill] = useState('');
   const beep = useScanSound();
   const { lookup } = useBarcodeLookup({ business, location, intent: 'LOOKUP' });
 
@@ -94,6 +101,38 @@ export default function PosReturnForm() {
       setLoading(false);
     }
   }, [business, location, beep, lineFor]);
+
+  /* The customer's bills, loaded once when the screen opens from the till
+     with a customer selected. */
+  useEffect(() => {
+    if (!customerId) return undefined;
+    let off = false;
+    const qs = new URLSearchParams({ customer: customerId, business: business || '', location: location || '' });
+    fetch('/api/sell-pos-return/lookup?' + qs, { cache: 'no-store' })
+      .then((r) => r.json().then((d) => ({ ok: r.ok, d })))
+      .then(({ ok, d }) => {
+        if (off) return;
+        if (!ok) { setHistoryError(d.error || "Could not load this customer's bills."); return; }
+        setHistory(d);
+      })
+      .catch(() => { if (!off) setHistoryError('Could not reach the server.'); });
+    return () => { off = true; };
+  }, [customerId, business, location]);
+
+  /* Ticking a bill opens it for return exactly as typing its number and
+     pressing Find does. One bill at a time - a return is against one
+     invoice - so ticking another switches to it, and unticking clears it. */
+  function tickBill(bill) {
+    if (pickedBill === bill._id) {
+      setPickedBill('');
+      setSale(null);
+      setPicked([]);
+      return;
+    }
+    setPickedBill(bill._id);
+    setQuery(bill.invoiceNo);
+    find(bill.invoiceNo);
+  }
 
   /* A scan either finds the sale (nothing loaded yet) or ticks a line on the
      sale already open - which is exactly how an operator works through a bag
@@ -187,7 +226,7 @@ export default function PosReturnForm() {
             <button
               type="button"
               className="btn"
-              onClick={() => { setDone(null); setSale(null); setPicked([]); setQuery(''); setNotes(''); setRefundAmount(''); }}
+              onClick={() => { setDone(null); setSale(null); setPicked([]); setQuery(''); setNotes(''); setRefundAmount(''); setPickedBill(''); setHistory(null); setHistoryError(''); if (customerId) { const qs = new URLSearchParams({ customer: customerId, business: business || '', location: location || '' }); fetch('/api/sell-pos-return/lookup?' + qs, { cache: 'no-store' }).then((r) => r.json()).then((d) => setHistory(d.bills ? d : null)).catch(() => {}); } }}
             >
               Process another return
             </button>
@@ -207,6 +246,70 @@ export default function PosReturnForm() {
 
       <div className="card-body">
         {flash && <div className={'flash ' + (flash.type === 'err' ? 'flash-err' : 'flash-ok')}>{flash.msg}</div>}
+
+        {/* --------------------------------------- customer's bills ---- */}
+        {customerId && (
+          <div className="form-section">
+            <div className="form-section-title">
+              Bills of {history?.customer?.name || 'this customer'}
+              {history?.customer?.contact ? ' - ' + history.customer.contact : ''}
+            </div>
+            {historyError && <div className="flash flash-err">{historyError}</div>}
+            {!history && !historyError && <div className="text-[13px] text-inkmuted">Loading bills...</div>}
+            {history && (
+              <div className="overflow-x-auto">
+                <table className="dt">
+                  <thead>
+                    <tr>
+                      <th style={{ width: 44 }} />
+                      <th>Invoice No</th>
+                      <th>Date</th>
+                      <th className="text-right">Items</th>
+                      <th className="text-right">Bill Value</th>
+                      <th className="text-right">Paid</th>
+                      <th>Returns</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {history.bills.length === 0 && (
+                      <tr><td colSpan="7" className="dt-empty">No bills for this customer.</td></tr>
+                    )}
+                    {history.bills.map((b) => {
+                      const nothingLeft = b.returnableCount === 0;
+                      return (
+                        <tr
+                          key={b._id}
+                          className={pickedBill === b._id ? 'bg-[#f0f7ff]' : (nothingLeft ? 'opacity-60' : 'cursor-pointer')}
+                          onClick={() => { if (!nothingLeft) tickBill(b); }}
+                        >
+                          <td onClick={(e) => e.stopPropagation()}>
+                            <input
+                              type="checkbox"
+                              aria-label={'Return against ' + b.invoiceNo}
+                              disabled={nothingLeft || loading}
+                              checked={pickedBill === b._id}
+                              onChange={() => tickBill(b)}
+                            />
+                          </td>
+                          <td className="font-semibold">{b.invoiceNo || '-'}</td>
+                          <td>{dateText(b.date)}</td>
+                          <td className="text-right">{b.itemCount}</td>
+                          <td className="text-right">{money(b.totalAmount)}</td>
+                          <td className="text-right">{money(b.paid)}</td>
+                          <td className={'text-[12px] ' + (nothingLeft ? 'text-danger' : 'text-inkmuted')}>
+                            {nothingLeft
+                              ? (b.returnedCount ? 'All returned' : 'No barcoded items')
+                              : b.returnedCount ? b.returnedCount + ' returned' : '-'}
+                          </td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </div>
+        )}
 
         {/* ---------------------------------------------------- find ---- */}
         <div className="form-section">

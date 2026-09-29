@@ -4,6 +4,8 @@ import Business from '@/models/Business';
 import CompanyLocation from '@/models/CompanyLocation';
 import { Customer } from '@/lib/contacts';
 import PosCounter from '@/models/PosCounter';
+import SalesPerson from '@/models/SalesPerson';
+import { isValidObjectId } from 'mongoose';
 import { requireSession } from '@/lib/session';
 import { validate } from '@/lib/validate';
 import { screenDenial, SCREENS, ACTIONS as PERM } from '@/lib/screenPermission';
@@ -40,6 +42,21 @@ export async function GET(req, { params }) {
     doc.customerId ? Customer.findById(doc.customerId).lean() : null,
     doc.counterId ? PosCounter.findById(doc.counterId).lean() : null,
   ]);
+  /* The sales person is recorded per LINE (the till's Sales Person column),
+     as a Staff Management -> Sales Persons id. Resolved to names here so the
+     View screen can show who sold each piece, and the distinct names for the
+     bill as a whole. */
+  const spIds = [...new Set((doc.items || []).map((l) => String(l.salesPerson || '')).filter(isValidObjectId))];
+  const salesPeople = spIds.length
+    ? await SalesPerson.find({ _id: { $in: spIds } }).select('_id name').lean()
+    : [];
+  const spName = new Map(salesPeople.map((p) => [String(p._id), p.name || '']));
+  const items = (doc.items || []).map((l) => ({
+    ...l,
+    salesPersonName: spName.get(String(l.salesPerson || '')) || '',
+  }));
+  const salesPersonNames = [...new Set(items.map((l) => l.salesPersonName).filter(Boolean))];
+
   const customerData = customer || doc.customerSnapshot || null;
   const customerName = customerData
     ? customerData.businessName || [customerData.firstName, customerData.middleName, customerData.lastName].filter(Boolean).join(' ')
@@ -54,6 +71,8 @@ export async function GET(req, { params }) {
     customerContact: doc.customerContact || customerData?.billingMobile || '',
     customerAddress: customerData ? [customerData.billingAddressLine1, customerData.billingCity, customerData.billingDistrict, customerData.billingTaluk, customerData.billingState, customerData.billingCountry, customerData.billingZipCode].filter(Boolean).join(', ') : '',
     counterName: counter?.counterName || '',
+    items,
+    salesPersonName: salesPersonNames.join(', '),
     status: doc.paymentStatus === 'Paid' ? 'FINALIZED' : doc.paymentStatus || 'DRAFT',
   } });
 }

@@ -27,6 +27,13 @@ import Icon from './Icon';
                caller sets the document title so the suggested filename is
                the record's own number.
      Print     the same preview through the browser's print dialog.
+     Instagram (only when the caller asks for it with `instagram`) Instagram
+               has NO link that pre-fills a message, on the web or in the
+               app. So on a phone the system share sheet is opened, where
+               Instagram is one of the targets; elsewhere the message is
+               copied and Instagram Direct opened, for the operator to paste.
+
+   Download and Print show only when the caller passes a handler for them.
 
    Copy message is the fallback for a blocked popup or a machine with no
    WhatsApp: the text is the same one the other two routes send.
@@ -63,6 +70,8 @@ export default function ShareDocDialog({
   onDownload,
   onPrint,
   onClose,
+  /* opt-in: a screen that wants the Instagram route passes true */
+  instagram = false,
 }) {
   const [error, setError] = useState('');
   const [notice, setNotice] = useState('');
@@ -129,6 +138,32 @@ export default function ShareDocDialog({
     }
   }
 
+  async function instagramShare() {
+    setError('');
+    setNotice('');
+    /* a phone: the system share sheet lists Instagram among its targets */
+    if (typeof navigator !== 'undefined' && navigator.share && /Android|iPhone|iPad/i.test(navigator.userAgent || '')) {
+      try {
+        await navigator.share({ title: subject, text: message });
+        return;
+      } catch (e) {
+        if (e && e.name === 'AbortError') return;   // the operator closed the sheet
+      }
+    }
+    /* a desktop: copy, then open Direct for pasting */
+    try {
+      await navigator.clipboard.writeText(message);
+    } catch {
+      setError('Could not copy the message - open "Message being sent" below and copy it, then paste it into Instagram.');
+      return;
+    }
+    const win = window.open('https://www.instagram.com/direct/inbox/', '_blank');
+    if (win) { try { win.opener = null; } catch { /* cross-origin */ } }
+    setNotice(win
+      ? 'Message copied. Instagram opened - pick the person and paste it (Ctrl+V).'
+      : 'Message copied. Open Instagram and paste it into the chat (Ctrl+V).');
+  }
+
   async function copyMessage() {
     setError('');
     try {
@@ -169,8 +204,9 @@ export default function ShareDocDialog({
                 is this application's only document output. "Save as PDF" in
                 it is the download; a printer is the print. The hints say that
                 rather than promising a file the code cannot produce. */}
-            <Row icon="save" label="Download" hint={'Opens the print dialog - choose "Save as PDF"'} onClick={() => { onClose?.(); onDownload?.(); }} />
-            <Row icon="printer" label="Print" hint="Opens the print dialog - choose your printer" onClick={() => { onClose?.(); onPrint?.(); }} />
+            {instagram && <Row icon="instagram" label="Instagram" hint="Copies the details and opens Instagram to paste them" onClick={instagramShare} />}
+            {onDownload && <Row icon="save" label="Download" hint={'Opens the print dialog - choose "Save as PDF"'} onClick={() => { onClose?.(); onDownload?.(); }} />}
+            {onPrint && <Row icon="printer" label="Print" hint="Opens the print dialog - choose your printer" onClick={() => { onClose?.(); onPrint?.(); }} />}
           </div>
 
           <details className="mt-4">

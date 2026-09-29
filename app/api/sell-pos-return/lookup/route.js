@@ -49,6 +49,57 @@ export const GET = handler(async (req) => {
   const invoiceRef = (sp.get('invoice') || '').trim();
   const barcode = (sp.get('barcode') || '').trim();
 
+  /* A THIRD WAY IN: the customer. The till passes the customer it has
+     selected, and the return screen lists that customer's bills for the
+     operator to tick one - no invoice number needed. Answers with the bills
+     only; ticking one then comes back through ?invoice= for its lines. */
+  const customer = (sp.get('customer') || '').trim();
+  if (customer && !invoiceRef && !barcode) {
+    if (!isValidObjectId(customer)) return json({ error: 'Unknown customer.', code: 'BAD_INPUT' }, 400);
+    const scopeBy = business && isValidObjectId(business) ? { businessId: business } : {};
+    const bills = await PosInvoice.find({ customerId: customer, ...scopeBy })
+      .sort({ date: -1, createdAt: -1 })
+      .limit(50)
+      .select('invoiceNo date createdAt totalAmount paid items customerSnapshot customerContact')
+      .lean();
+
+    /* how many pieces on each bill have already come back */
+    const returns = bills.length
+      ? await PosReturn.find({ parentInvoiceId: { $in: bills.map((b) => b._id) } }).select('parentInvoiceId items').lean()
+      : [];
+    const returnedCount = new Map();
+    returns.forEach((r) => {
+      const key = String(r.parentInvoiceId);
+      returnedCount.set(key, (returnedCount.get(key) || 0) + (r.items || []).length);
+    });
+
+    const snap = bills[0]?.customerSnapshot || null;
+    return json({
+      ok: true,
+      customer: {
+        _id: customer,
+        name: snap?.businessName
+          || [snap?.firstName, snap?.middleName, snap?.lastName].filter(Boolean).join(' ') || '',
+        contact: bills[0]?.customerContact || snap?.billingMobile || '',
+      },
+      bills: bills.map((b) => {
+        const barcoded = (b.items || []).filter((l) => l.barcodeNo).length;
+        const returned = returnedCount.get(String(b._id)) || 0;
+        return {
+          _id: String(b._id),
+          invoiceNo: b.invoiceNo || '',
+          date: b.date || b.createdAt,
+          itemCount: (b.items || []).length,
+          totalAmount: Number(b.totalAmount || 0),
+          paid: Number(b.paid || 0),
+          returnedCount: returned,
+          /* a bill with nothing left to take back is shown, but marked */
+          returnableCount: Math.max(0, barcoded - returned),
+        };
+      }),
+    });
+  }
+
   if (!invoiceRef && !barcode) {
     return json({ error: 'Enter an invoice number or scan an item.', code: 'BAD_INPUT' }, 400);
   }

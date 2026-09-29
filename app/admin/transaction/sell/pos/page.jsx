@@ -1,6 +1,9 @@
 'use client';
+import { useMemo, useState } from 'react';
 import ListView from '@/components/ListView';
 import Icon from '@/components/Icon';
+import PosInvoiceView from '@/components/PosInvoiceView';
+import PosPaymentsView from '@/components/PosPaymentsView';
 
 /* Pos - list. Columns declared here, not fetched from a registry. */
 
@@ -101,13 +104,18 @@ const CONFIG = {
   endpoint: '/api/sell-pos',
   scope: ["business","location","finYear"],
   addHref: "/admin/pos/add",
+  /* the till opens in its own browser tab, so the list stays open here */
+  addNewTab: true,
   actionPosition: "left",
   /* three different destinations - view, payments, print - shown side by
      side rather than behind one Action menu. */
   actionVariant: "buttons",
   actionMenu: [
-    { label: "View", icon: "eye", to: (row) => `/admin/transaction/sell/pos/view/${row._id}` },
-    { label: "View Payments", icon: "ledger", to: (row) => `/admin/transaction/sell/pos/payment/${row._id}` },
+    /* View opens in a popup over the list - see the page component below.
+       The stand-alone /pos/view/<id> page still works for direct links. */
+    { label: "View", icon: "eye" },
+    /* also a popup; /pos/payment/<id> still works for direct links */
+    { label: "View Payments", icon: "ledger" },
     { label: "Print Invoice", icon: "printer", to: (row) => `/admin/transaction/sell/pos/print/${row._id}` },
   ],
   /* THE BOXES ABOVE THE LIST. Filled from the endpoint's `summary`, so they
@@ -122,10 +130,10 @@ const CONFIG = {
      counter - which is exactly what the two numbers together say. */
   summaryCards: [
     { k: 'count', label: 'Total Invoices' },
-    { k: 'totalAmount', label: 'Total Amount', f: 'amount' },
-    { k: 'paid', label: 'Collected', f: 'amount' },
-    { k: 'sellDue', label: 'Outstanding', f: 'amount' },
-    { k: 'totalQty', label: 'Qty Sold', f: 'amount' },
+    { k: 'totalAmount', label: 'Total Amount', f: 'wholeAmount' },
+    { k: 'paid', label: 'Collected', f: 'wholeAmount', breakdown: 'paidBy' },
+    // { k: 'sellDue', label: 'Outstanding', f: 'wholeAmount' },
+    { k: 'totalQty', label: 'Qty Sold', f: 'qty', breakdown: 'qtyBy' },
   ],
   filters: [
     { k: "invoiceNo", label: "Invoice No", type: "text" },
@@ -149,12 +157,12 @@ const CONFIG = {
     // { k: "billingType", t: "Billing Type" },
     // { k: "paymentStatus", t: "Payment Status" },
     /* The amount, and under it how it was paid. `f` is kept so the CSV and
-       Excel exports still write a plain "260.00" - exportRows formats from
+       Excel exports still write a plain "260" - exportRows formats from
        the field and never calls render. */
     {
       k: "totalAmount",
-      t: "Total Amount",
-      f: "amount",
+      t: " Amount",
+      f: "wholeAmount",
       render: (r) => {
         const mode = payModes(r);
         const status = String(r.paymentStatus || '').trim();
@@ -162,7 +170,7 @@ const CONFIG = {
         return (
           <span className="inline-flex flex-col gap-0.5 leading-tight">
             <span className="font-semibold text-okgreen">
-              {'₹' + Number(r.totalAmount || 0).toFixed(2)}
+              {'₹' + Math.trunc(Number(r.totalAmount || 0))}
             </span>
             {status && (
               <span className={'inline-flex items-center gap-1 text-[11px] font-semibold ' + look.className}>
@@ -175,11 +183,56 @@ const CONFIG = {
         );
       },
     },
-    { k: "paid", t: "Paid", f: "amount" },
-    { k: "sellDue", t: "Sell Due", f: "amount" },
+    { k: "paid", t: "Paid", f: "wholeAmount" },
+     { k: "sellDue", t: "Sell Due", f: "wholeAmount" },
   ],
 };
 
 export default function TransactionSellPosListPage() {
-  return <ListView cfg={CONFIG} />;
+  /* the invoice open in a popup, and which one: 'view' or 'payments' */
+  const [popup, setPopup] = useState(null);   // { id, kind }
+  /* bumped after a payment is edited, so Paid / Sell Due and the cards
+     refresh without losing the filters */
+  const [reloadKey, setReloadKey] = useState(0);
+
+  /* Memoised so the list keeps one cfg object - a new one on every render
+     would look like a changed screen to ListView. setPopup is stable. */
+  const cfg = useMemo(() => ({
+    ...CONFIG,
+    actionMenu: CONFIG.actionMenu.map((m) => {
+      if (m.label === 'View') return { ...m, onClick: (row) => setPopup({ id: row._id, kind: 'view' }) };
+      if (m.label === 'View Payments') return { ...m, onClick: (row) => setPopup({ id: row._id, kind: 'payments' }) };
+      return m;
+    }),
+  }), []);
+
+  const close = () => setPopup(null);
+
+  return (
+    <>
+      <ListView cfg={cfg} reloadKey={reloadKey} />
+      {popup && (
+        <div
+          className="fixed inset-0 z-50 flex items-start justify-center overflow-y-auto bg-black/40 p-4"
+          onMouseDown={close}
+        >
+          <div
+            className="my-6 w-full max-w-6xl overflow-hidden rounded-lg bg-white shadow-xl"
+            onMouseDown={(e) => e.stopPropagation()}
+          >
+            {popup.kind === 'payments' ? (
+              <PosPaymentsView
+                id={popup.id}
+                onBack={close}
+                backLabel="Close"
+                onSaved={() => setReloadKey((k) => k + 1)}
+              />
+            ) : (
+              <PosInvoiceView id={popup.id} onBack={close} backLabel="Close" />
+            )}
+          </div>
+        </div>
+      )}
+    </>
+  );
 }

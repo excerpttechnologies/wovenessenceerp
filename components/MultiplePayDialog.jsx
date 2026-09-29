@@ -21,7 +21,8 @@ const MULTI_PAYMENT_METHODS = ['Cash', UPI_METHOD, 'Bank Deposit'];
    sit under it rather than cluttering the main list. */
 const UPI_PROVIDERS = ['PayTM', 'PhonePe', 'GPay'];
 
-const money = (value) => Number(value || 0).toFixed(2);
+/* whole rupees, as on the till and the POS list */
+const money = (value) => String(Math.trunc(Number(value || 0)));
 
 const sameMethod = (a, b) => String(a || '').trim().toLowerCase() === String(b || '').trim().toLowerCase();
 

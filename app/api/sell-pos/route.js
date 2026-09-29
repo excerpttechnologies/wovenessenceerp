@@ -14,6 +14,7 @@ import {
   withTransaction, loadUnits, sellUnits, unitsByCode, InventoryError, BARCODE_STATUS,
 } from '@/lib/inventory';
 import { barcodeKey, sameBarcode } from '@/lib/barcodeValue';
+import { uomTypeOf } from '@/lib/barcodeUnits';
 import { handler } from '@/lib/apiError';
 import { requirePermission, PERMISSIONS } from '@/lib/rbac';
 import { screenDenial, SCREENS, ACTIONS as PERM } from '@/lib/screenPermission';
@@ -142,6 +143,101 @@ export async function GET(req) {
 
   const round2 = (v) => Math.round((Number(v) || 0) * 100) / 100;
 
+  /* WHAT THE COLLECTED FIGURE WAS PAID WITH, over the same filtered set.
+
+     Read from the payments rows, the same way the list's own "paid with"
+     line does: only rows carrying an amount count, and a bill with no
+     payment rows at all (older bills, from before Multiple Pay) is counted
+     under its billingType for whatever it has paid. That keeps the
+     breakdown adding up to the Collected total. */
+  const amountOf = { $convert: { input: '$$p.amount', to: 'double', onError: 0, onNull: 0 } };
+  const byMethod = await PosInvoice.aggregate([
+    { $match: matchIds },
+    {
+      $project: {
+        rows: {
+          $let: {
+            vars: {
+              real: {
+                $filter: {
+                  input: { $cond: [{ $isArray: '$payments' }, '$payments', []] },
+                  as: 'p',
+                  cond: { $gt: [amountOf, 0] },
+                },
+              },
+            },
+            in: {
+              $cond: [
+                { $gt: [{ $size: '$$real' }, 0] },
+                {
+                  $map: {
+                    input: '$$real',
+                    as: 'p',
+                    in: { method: '$$p.method', loyalty: '$$p.loyalty', amount: amountOf },
+                  },
+                },
+                [{ method: '$billingType', loyalty: false, amount: { $ifNull: ['$paid', 0] } }],
+              ],
+            },
+          },
+        },
+      },
+    },
+    { $unwind: '$rows' },
+    {
+      $group: {
+        _id: { method: '$rows.method', loyalty: '$rows.loyalty' },
+        amount: { $sum: '$rows.amount' },
+      },
+    },
+  ]);
+
+  /* Folded into the buckets the counter reads: Cash, UPI (UPI/Card and the
+     wallets added under it on the payment dialog), Loyalty Points, and any
+     other method under its own name - Bank Deposit, Credit and the like. */
+  const UPI_METHODS = ['upi/card', 'upi', 'paytm', 'phonepe', 'gpay'];
+  const paidBy = new Map();
+  byMethod.forEach(({ _id, amount }) => {
+    const method = String(_id?.method || '').trim();
+    const key = method.toLowerCase();
+    const bucket = _id?.loyalty === true ? 'Loyalty Points'
+      : key === 'cash' ? 'Cash'
+        : UPI_METHODS.includes(key) ? 'UPI'
+          : method || 'Other';
+    paidBy.set(bucket, (paidBy.get(bucket) || 0) + (Number(amount) || 0));
+  });
+  /* Only Cash and UPI are shown on the card, as asked - shown even at zero
+     so the card reads the same every day. Loyalty, Bank Deposit and the
+     rest are still inside the Collected total, just not itemised. */
+  const paidByList = ['Cash', 'UPI'].map((label) => ({ label, amount: round2(paidBy.get(label)) }));
+
+  /* QTY SOLD SPLIT INTO PIECES AND METRES, over the same filtered set - 15
+     sarees and 10 metres of cloth is not 25 of anything.
+
+     A line's kind is its own uomType when the till stored one (every
+     barcoded line carries it), otherwise it is read from the free-text UOM
+     by uomTypeOf(), the app's single definition of "is this metres". */
+  const byUom = await PosInvoice.aggregate([
+    { $match: matchIds },
+    { $unwind: '$items' },
+    {
+      $group: {
+        _id: { uomType: '$items.uomType', uom: '$items.uom' },
+        qty: { $sum: { $convert: { input: '$items.qty', to: 'double', onError: 0, onNull: 0 } } },
+      },
+    },
+  ]);
+  const qtyBy = { PC: 0, MTR: 0 };
+  byUom.forEach(({ _id, qty }) => {
+    const stored = String(_id?.uomType || '').trim().toUpperCase();
+    const kind = stored === 'PC' || stored === 'MTR' ? stored : uomTypeOf(_id?.uom);
+    qtyBy[kind] += Number(qty) || 0;
+  });
+  const qtyByList = [
+    { label: 'Pcs', amount: round2(qtyBy.PC) },
+    { label: 'Mtrs', amount: round2(qtyBy.MTR) },
+  ];
+
   const rows = await PosInvoice.find(filter)
     .sort({ createdAt: -1 })
     .skip((page - 1) * perPage)
@@ -178,8 +274,10 @@ export async function GET(req) {
       count: total,
       totalAmount: round2(sums && sums.totalAmount),
       paid: round2(sums && sums.paid),
+      paidBy: paidByList,
       sellDue: round2(sums && sums.sellDue),
       totalQty: round2(sums && sums.totalQty),
+      qtyBy: qtyByList,
     },
     total,
     page,
@@ -347,6 +445,13 @@ export const POST = handler(async (req) => {
       doc.invoiceNo = await nextDocNumber(PosInvoice, 'invoiceNo', 'POS', {
         businessId: doc.businessId, locationId: doc.locationId, finYear: doc.finYear,
       });
+      /* POS INVOICE NUMBERS READ "POS0070". With no prefix set for POS on the
+         Doc Setup master the series is bare digits, so "POS" goes in front -
+         the running number is the same counter as before, so numbering
+         carries on (0069 -> POS0070) rather than restarting. A prefix set on
+         Doc Setup still wins: a number that already starts with letters is
+         left exactly as issued. */
+      if (/^\d/.test(doc.invoiceNo)) doc.invoiceNo = 'POS' + doc.invoiceNo;
     }
 
     const [invoice] = await PosInvoice.create([doc], dbSession ? { session: dbSession } : {});

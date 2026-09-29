@@ -1534,7 +1534,10 @@ function ActionMenu({ items, open, onToggle, onGo, onAction, emptyReason = '' })
   );
 }
  
-export default function ListView({ cfg, slug }) {
+/* `reloadKey` lets the screen hosting the list ask it to re-fetch - bump the
+   number after something outside the list (a popup) changed its rows. The
+   filters, page and search are kept. */
+export default function ListView({ cfg, slug, reloadKey = 0 }) {
   const router = useRouter();
   const { business, location, finYear, businessReady, locationReady, can } = useScope();
 
@@ -1617,7 +1620,7 @@ export default function ListView({ cfg, slug }) {
       if (m.need === 'delete') return mayDelete;
       return true;
     })
-    .map((m) => ({ ...m, href: m.to ? m.to(row) : undefined, rowId: row._id }));
+    .map((m) => ({ ...m, href: m.to ? m.to(row) : undefined, rowId: row._id, row }));
  
   const slugPath = cfg.slugPath || slug;
   const base = (cfg.basePath || "/admin/setting/") + slugPath;
@@ -1746,6 +1749,11 @@ export default function ListView({ cfg, slug }) {
   useEffect(() => {
     load();
   }, [load]);
+  /* skipped on mount - the effect above already loads once */
+  useEffect(() => {
+    if (reloadKey) load();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [reloadKey]);
   useEffect(() => {
     setPage(1);
   }, [slugPath, search, business, location, finYear]);
@@ -1886,7 +1894,7 @@ export default function ListView({ cfg, slug }) {
      - a date, an invoice number with its leading zeros, a phone number - is
      corrupted by Excel's guessing. See toXlsHtml in lib/format.js. */
   const exportNumericCols = () => visible
-    .map((c, idx) => (c.f === "amount" ? idx : -1))
+    .map((c, idx) => (c.f === "amount" || c.f === "wholeAmount" ? idx : -1))
     .filter((idx) => idx >= 0);
   const fileBase = String(slugPath).replace(/\//g, "-");
 
@@ -2007,8 +2015,30 @@ export default function ListView({ cfg, slug }) {
               <div className="mt-1 text-[20px] font-bold text-brand">
                 {c.f === "amount"
                   ? Number(state.summary[c.k] || 0).toFixed(2)
+                  : c.f === "wholeAmount"
+                  ? Math.trunc(Number(state.summary[c.k] || 0))
                   : (state.summary[c.k] ?? 0)}
               </div>
+              {/* optional breakdown under the figure - cfg.summaryCards
+                  `breakdown` names a summary key holding [{ label, amount }] */}
+              {c.breakdown && Array.isArray(state.summary[c.breakdown]) && (
+                <div className="mt-1.5 space-y-0.5 border-t border-line pt-1.5 text-[12px]">
+                  {state.summary[c.breakdown].map((b) => (
+                    <div key={b.label} className="flex justify-between gap-3">
+                      <span className="text-inkmuted">{b.label}</span>
+                      <span className="font-semibold text-ink">
+                        {c.f === "wholeAmount"
+                          ? Math.trunc(Number(b.amount || 0))
+                          : c.f === "qty"
+                          /* a quantity keeps a real fraction (2.5 metres)
+                             but drops a pointless one (12, not 12.00) */
+                          ? Math.round(Number(b.amount || 0) * 100) / 100
+                          : Number(b.amount || 0).toFixed(2)}
+                      </span>
+                    </div>
+                  ))}
+                </div>
+              )}
             </div>
           ))}
         </div>
@@ -2108,7 +2138,11 @@ export default function ListView({ cfg, slug }) {
                 if (needs.includes("location") && location) carry.set("location", location);
                 if (needs.includes("finYear") && finYear) carry.set("finYear", finYear);
                 const qs = carry.toString();
-                return router.push(cfg.addHref + (qs ? (cfg.addHref.includes("?") ? "&" : "?") + qs : ""));
+                const url = cfg.addHref + (qs ? (cfg.addHref.includes("?") ? "&" : "?") + qs : "");
+                /* cfg.addNewTab opens the add screen in a new browser tab and
+                   leaves the list where it is - POS opens the till this way */
+                if (cfg.addNewTab) { window.open(url, "_blank", "noopener"); return undefined; }
+                return router.push(url);
               }
               return router.push(base + "/add");
             }}
@@ -2238,6 +2272,9 @@ export default function ListView({ cfg, slug }) {
                                 aria-label={m.label}
                                 onClick={() => {
                                   if (m.action === 'delete') { remove(m.rowId); return; }
+                                  /* `onClick` lets a screen handle the action
+                                     itself - POS opens View in a popup */
+                                  if (m.onClick) { m.onClick(m.row); return; }
                                   if (m.href) router.push(m.href);
                                 }}
                               >

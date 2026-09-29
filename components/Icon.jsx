@@ -35,6 +35,9 @@ const P = {
      button, which offers WhatsApp / Email / Download / Print */
   share: 'M18 8a2.5 2.5 0 100-5 2.5 2.5 0 000 5zM6 14.5a2.5 2.5 0 100-5 2.5 2.5 0 000 5zM18 21a2.5 2.5 0 100-5 2.5 2.5 0 000 5zM8.2 10.8l7.6-3.9M8.2 13.2l7.6 3.9',
   plus: 'M12 5v14M5 12h14',
+  minus: 'M5 12h14',
+  /* camera outline - the Instagram route on the share dialog */
+  instagram: 'M7 3h10a4 4 0 014 4v10a4 4 0 01-4 4H7a4 4 0 01-4-4V7a4 4 0 014-4zM12 16a4 4 0 100-8 4 4 0 000 8zM17.5 6.5h.01',
   cols: 'M4 5h16v14H4zM10 5v14M16 5v14',
   /* keypad: body, display strip, then two rows of keys */
   calculator: 'M5 3h14v18H5zM8 6h8v3H8zM8 13h1M12 13h1M16 13h1M8 17h1M12 17h1M16 17h1',

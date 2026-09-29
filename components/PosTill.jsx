@@ -10,6 +10,7 @@ import { useScanner, useBarcodeLookup, useScanSound } from '@/components/useScan
 import { useOptions } from '@/components/useOptions';
 import MultiplePayDialog from '@/components/MultiplePayDialog';
 import SupplierImportPanel from '@/components/SupplierImportPanel';
+import { uomTypeOf } from '@/lib/barcodeUnits';
 
 const PAYMENT_MODES = ['Cash', 'Credit', 'Export', 'COD'];
 /* Kept in step with the same list in components/MultiplePayDialog.jsx,
@@ -45,7 +46,12 @@ const retailFirst = (types) => (
   (types.find((t) => /^\s*retail\s*$/i.test(String(t.label || ''))) || types[0] || {}).value || ''
 );
 
-const money = (value) => Number(value || 0).toFixed(2);
+/* Whole rupees everywhere on the till - the paise are dropped, not rounded,
+   the same rule as the POS list. */
+const money = (value) => String(Math.trunc(Number(value || 0)));
+/* GST is a PERCENTAGE, not money, so it keeps a real fraction (2.5) and
+   loses only a pointless one (5, not 5.00) */
+const gstPct = (value) => String(Math.round(Number(value || 0) * 100) / 100);
 const customerLabel = (customer) => {
   const business = String(customer.businessName || '').trim();
   const person = [customer.firstName, customer.middleName, customer.lastName]
@@ -127,7 +133,7 @@ function Calculator({ onClose }) {
   };
 
   return (
-    <div className="absolute right-0 top-full z-[70] mt-1 w-64 rounded-lg border border-line bg-white p-3 shadow-pop" onClick={(e) => e.stopPropagation()}>
+    <div className="absolute left-0 top-full z-[70] mt-1 w-64 rounded-lg border border-line bg-white p-3 shadow-pop" onClick={(e) => e.stopPropagation()}>
       <div className="mb-2 flex items-center justify-between">
         <span className="text-[13px] font-semibold">Calculator</span>
         <button type="button" aria-label="Close" onClick={onClose}><Icon name="x" size={14} /></button>
@@ -184,7 +190,7 @@ const IMPORT_LABELS = {
   businessType: 'Business Type', firstName: 'Name',
   billingAddressLine1: 'Address Line 1', billingAddressLine2: 'Address Line 2',
   billingCity: 'City', billingDistrict: 'District', billingState: 'State',
-  billingTaluk: 'Taluk', billingZipCode: 'Zip Code', billingCountry: 'Country',
+  billingTaluk: 'Taluk', billingZipCode: 'Pin Code', billingCountry: 'Country',
   billingMobile: 'Mobile', billingAlternateContactNumber: 'Alternate Contact',
   billingLandline: 'Landline', billingFax: 'Fax',
   billingEmail: 'Email', billingEmail2: 'Email 2', billingWebsiteUrl: 'Website URL',
@@ -286,7 +292,10 @@ function CustomerForm({ values, setValues, typeOptions, onClose, onSave, saving 
               and is still submitted, and the full Customer master screen still
               shows it. Same call as State / Country / District / Taluk / Fax
               below: the counter does not type it. */}
-          <label className="f-label">Prefix<select className="f-input" value={values.prefix} onChange={(e) => {
+          {/* PREFIX and GENDER describe a PERSON. A registered customer is a
+              business, so both are put away when Business Type says so - and
+              dropped from what is saved, see saveCustomer. */}
+          {values.businessType !== 'Registered' && <label className="f-label">Prefix<select className="f-input" value={values.prefix} onChange={(e) => {
             const next = e.target.value;
             /* one setValues, not set() twice: two calls in the same handler
                would each start from the same snapshot and the second would
@@ -308,7 +317,7 @@ function CustomerForm({ values, setValues, typeOptions, onClose, onSave, saving 
     <option>Sr.</option>
     <option>Fr.</option>
     <option>M/s.</option>
-          </select></label>
+          </select></label>}
           {/* ONE NAME BOX, not three. The counter is told a name - "Sagar
               Kumar" - and is not in a position to decide which part of it is a
               middle name; three boxes made that guess the operator's problem
@@ -330,10 +339,10 @@ function CustomerForm({ values, setValues, typeOptions, onClose, onSave, saving 
               the required star instead. Exactly one identity field is asked
               for in either state, never none and never both. */}
           {values.businessType !== 'Registered' && text('firstName', 'Name *', true)}
-          <label className="f-label">DOB<input className="f-input" type="date" value={values.dob || ''} onChange={(e) => set('dob', e.target.value)} /></label>
-          <label className="f-label">Gender<select className="f-input" value={values.gender || ''} onChange={(e) => set('gender', e.target.value)}>
+          <label className="f-label">{/* a business was incorporated, not born - same field */}{values.businessType === 'Registered' ? 'Date of Incorporation' : 'DOB'}<input className="f-input" type="date" value={values.dob || ''} onChange={(e) => set('dob', e.target.value)} /></label>
+          {values.businessType !== 'Registered' && <label className="f-label">Gender<select className="f-input" value={values.gender || ''} onChange={(e) => set('gender', e.target.value)}>
             <option value="">--Select Gender--</option><option>Male</option><option>Female</option><option>Other</option>
-          </select></label>
+          </select></label>}
         </div>
 
         <div className="form-section-title mt-4 border-t border-line pt-3">Billing Details</div>
@@ -342,7 +351,7 @@ function CustomerForm({ values, setValues, typeOptions, onClose, onSave, saving 
               picker, and Zip auto-fills city / state / country / district /
               taluk, which is why it is not just another text box. */}
           <div><Field f={{ k: 'billingCity', label: 'City', type: 'city' }} value={values.billingCity} onChange={set} /></div>
-          <div><Field f={{ k: 'billingZipCode', label: 'Zip Code', type: 'zip', fill: { city: 'billingCity', state: 'billingState', country: 'billingCountry', district: 'billingDistrict', taluk: 'billingTaluk' } }} value={values.billingZipCode} onChange={set} /></div>
+          <div><Field f={{ k: 'billingZipCode', label: 'Pin Code', type: 'zip', fill: { city: 'billingCity', state: 'billingState', country: 'billingCountry', district: 'billingDistrict', taluk: 'billingTaluk' } }} value={values.billingZipCode} onChange={set} /></div>
           {text('billingMobile', 'Mobile *', true)}
           {BILLING_ROWS.map(([key, label]) => text(key, label))}
         </div>
@@ -396,6 +405,10 @@ export default function PosTill() {
   const [customerForm, setCustomerForm] = useState(CUSTOMER_DEFAULTS);
   const [savingCustomer, setSavingCustomer] = useState(false);
   const [items, setItems] = useState([]);
+  /* The highlighted bill line, by index. Arrow Up / Down moves THAT line up
+     or down the bill - see the keyboard effect further down. Set by clicking
+     a row, and to the newest line (index 0) whenever one is added. */
+  const [activeRow, setActiveRow] = useState(null);
   const [itemSuggestions, setItemSuggestions] = useState([]);
 
   /* Line Wise Discount - the two footer boxes. Each applies ACROSS every line
@@ -645,6 +658,41 @@ export default function PosTill() {
      all, which is how a loose item or a search by name still reaches the
      bill.
      ==================================================================== */
+  /* ARROW UP / DOWN REORDER THE BILL.
+
+     The highlighted line (activeRow) swaps places with the one above or
+     below it, and stays highlighted so it can be walked further. Nothing
+     about the line changes - only its position on the bill.
+
+     Keys aimed at a real field are left alone: the Qty / RSP / Disc boxes
+     and the dropdowns use the arrows themselves. The scan box is the one
+     exception, because an arrow there does nothing - unless its suggestion
+     list is open. */
+  useEffect(() => {
+    function onKey(e) {
+      if (e.key !== 'ArrowUp' && e.key !== 'ArrowDown') return;
+      if (e.ctrlKey || e.altKey || e.metaKey || e.shiftKey) return;
+      const el = e.target;
+      const tag = String(el?.tagName || '').toLowerCase();
+      const inField = tag === 'input' || tag === 'textarea' || tag === 'select' || el?.isContentEditable;
+      if (inField && el?.dataset?.scanTarget === undefined) return;
+      if (inField && itemSuggestions.length) return;
+      if (activeRow === null) return;
+
+      const to = activeRow + (e.key === 'ArrowUp' ? -1 : 1);
+      if (to < 0 || to >= items.length) return;
+      e.preventDefault();
+      setItems((rows) => {
+        const next = [...rows];
+        [next[activeRow], next[to]] = [next[to], next[activeRow]];
+        return next;
+      });
+      setActiveRow(to);
+    }
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [activeRow, items.length, itemSuggestions.length]);
+
   const scannedCodes = useMemo(
     () => items.map((row) => row.barcodeNo).filter(Boolean),
     [items]
@@ -741,10 +789,11 @@ export default function PosTill() {
         name: item.name || hit.name,
         description: item.description || hit.description || item.name || hit.name,
         hsn: item.hsnCode || '', gst: Number(item.slabs?.[0]?.igst || 0), qty: 1,
-        rsp: Number(item.rsp ?? hit.rsp ?? 0), discountPct: 0, image: hit.image || '',
+        rsp: Math.trunc(Number(item.rsp ?? hit.rsp ?? 0)), discountPct: 0, image: hit.image || '',
         uom: item.uom || '', salesPerson: salesPerson || '',
       };
       setItems((rows) => [{ ...product, isReturn: isExchange && !rows.some((r) => r.isReturn) }, ...rows]);
+      setActiveRow(0);
       setSelectedProduct(product);
       setCode(''); setMsg('');
       beep('ok');
@@ -839,7 +888,8 @@ export default function PosTill() {
          QTY stepper. Kept separate from `qty` above, which is the quantity
          being SOLD and is edited by the operator. */
       closing: Number(unit.qty) || 0,
-      rsp: Number(unit.offerPrice || unit.rsp || 0),
+      /* whole rupees - the paise are dropped, as everywhere on the till */
+      rsp: Math.trunc(Number(unit.offerPrice || unit.rsp || 0)),
       discountPct: 0,
       image: unit.image || '',
       grcNo: unit.grcNo || '',
@@ -847,6 +897,7 @@ export default function PosTill() {
       ...overrides,
     };
     setItems((rows) => [{ ...product, isReturn: isExchange && !rows.some((r) => r.isReturn) }, ...rows]);
+    setActiveRow(0);
     setSelectedProduct(product);
     setItemSuggestions([]);
     setCode('');
@@ -938,6 +989,7 @@ export default function PosTill() {
      other - which is how a "cleared" screen keeps the last customer. */
   function clearTill() {
     setItems([]);
+    setActiveRow(null);
     /* the next bill is a different bill, and may be a different customer */
     setRedeemPoints(0);
     setSelectedProduct(null);
@@ -963,6 +1015,7 @@ export default function PosTill() {
 
       const h = d.doc;
       setItems(Array.isArray(h.items) ? h.items : []);
+      setActiveRow(null);
       setCustomer(h.customerId ? String(h.customerId) : 'walkin');
       setSelectedCustomer(h.customerSnapshot || null);
       setCounter(h.counterId ? String(h.counterId) : '');
@@ -1019,6 +1072,10 @@ export default function PosTill() {
         ...customerForm,
         firstName: String(customerForm.firstName || '').trim()
           || String(customerForm.businessName || '').trim(),
+        /* hidden for a business, so not saved against one either - the
+           defaults (Mr. / Male) would otherwise describe a firm as a man */
+        prefix: '',
+        gender: '',
       }
       : { ...customerForm, gstNo: '', businessName: '' };
 
@@ -1074,6 +1131,17 @@ export default function PosTill() {
     };
   });
   const qty = rows.reduce((sum, row) => sum + (row.isReturn ? -1 : 1) * Number(row.qty || 0), 0);
+  /* The same total split into pieces and metres - 1 saree and 10.5 metres
+     is not 11.5 of anything. A barcoded line carries its own uomType; any
+     other line is read from its UOM text by uomTypeOf(), the app's one rule
+     for "is this metres" (the POS list's Qty Sold card uses the same). */
+  const qtyOf = (kind) => Math.round(rows.reduce((sum, row) => {
+    const stored = String(row.uomType || '').trim().toUpperCase();
+    const type = stored === 'PC' || stored === 'MTR' ? stored : uomTypeOf(row.uom);
+    return type === kind ? sum + (row.isReturn ? -1 : 1) * Number(row.qty || 0) : sum;
+  }, 0) * 100) / 100;
+  const qtyPc = qtyOf('PC');
+  const qtyMtr = qtyOf('MTR');
   
   // sagar
 
@@ -1114,7 +1182,10 @@ export default function PosTill() {
   }, 0);
   const taxableAmount = billValue - tax;
   /* Net amount = goods + shipping. Tax is inside `billValue` already. */
-  const netAmount = billValue + Number(shipping || 0);
+  /* WHOLE RUPEES, and not only on screen: this is the figure the bill is
+     SAVED at and the payment dialog asks for. Showing 1097 while charging
+     1097.80 would leave every exact payment 0.80 short and Part Paid. */
+  const netAmount = Math.trunc(billValue + Number(shipping || 0));
 
 
 
@@ -1166,7 +1237,7 @@ export default function PosTill() {
 
   const redeemAmount = loyalty ? redeemPoints * Number(loyalty.pointsToInr || 0) : 0;
   /* what the customer actually hands over */
-  const payableAfterPoints = Math.max(0, netAmount - redeemAmount);
+  const payableAfterPoints = Math.max(0, Math.trunc(netAmount - redeemAmount));
 
   /* WHAT THIS BILL WILL EARN - shown before it is rung up, so the cashier can
      answer "how many will I get" without guessing.
@@ -1211,13 +1282,13 @@ export default function PosTill() {
       <div className="flex flex-wrap items-center gap-3 px-4 py-2.5 text-[13.5px]">{/* The till fills the screen and has no sidebar, so without this the only
           way out is the browser's own Back. It goes to the POS list - the
           screen whose ADD button opens this one - and carries the scope so the
-          list lands on the same business, location and year. */}<button type="button" aria-label="Back to POS list" title="Back to POS list" className="flex h-8 w-9 items-center justify-center rounded border border-line bg-white text-ink hover:bg-pillgrey" onClick={() => router.push(`/admin/transaction/sell/pos?business=${business || ''}&location=${location || ''}&finYear=${finYear || ''}`)}><Icon name="back" size={16} /></button><span className="text-inkmuted">Business:</span><select className="f-input w-64" value={business} onChange={(e) => changeBusiness(e.target.value)}><option value="">Select business</option>{businesses.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}</select><span className="text-inkmuted">Location:</span><select className="f-input w-64" value={location} onChange={(e) => setLocation(e.target.value)} disabled={!business}><option value="">Select location</option>{locations.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}</select><span className="flex items-center gap-1.5 text-cell"><Icon name="refresh" size={15} /> {timeStr}</span><span className="flex-1" />{selectedProduct && <div className="flex items-center gap-3 border-l border-line pl-3"><span className="max-w-40 truncate text-[12px] font-semibold">{selectedProduct.barcode || selectedProduct.code}</span><ProductImage src={selectedProduct.image} alt={selectedProduct.name} size={72} onOpen={() => setPreviewImage({ src: selectedProduct.image, alt: selectedProduct.name })} /></div>}<div className="relative"><button type="button" aria-label="Calculator" title="Calculator" className={'flex h-8 w-9 items-center justify-center rounded ' + (showCalc ? 'bg-[#dbe6f7] text-brand' : 'bg-brand text-white')} onClick={() => setShowCalc((v) => !v)}><Icon name="calculator" size={15} /></button>{showCalc && <Calculator onClose={() => setShowCalc(false)} />}</div>{/* The four buttons that sat after the Calculator - refresh, register,
+          list lands on the same business, location and year. */}<button type="button" aria-label="Back to POS list" title="Back to POS list" className="flex h-8 w-9 items-center justify-center rounded border border-line bg-white text-ink hover:bg-pillgrey" onClick={() => router.push(`/admin/transaction/sell/pos?business=${business || ''}&location=${location || ''}&finYear=${finYear || ''}`)}><Icon name="back" size={16} /></button><span className="text-inkmuted">Business:</span><select className="f-input w-64" value={business} onChange={(e) => changeBusiness(e.target.value)}><option value="">Select business</option>{businesses.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}</select><span className="text-inkmuted">Location:</span><select className="f-input w-64" value={location} onChange={(e) => setLocation(e.target.value)} disabled={!business}><option value="">Select location</option>{locations.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}</select><span className="flex items-center gap-1.5 text-cell"><Icon name="refresh" size={15} /> {timeStr}</span>{/* calculator sits beside the clock */}<div className="relative"><button type="button" aria-label="Calculator" title="Calculator" className={'flex h-8 w-9 items-center justify-center rounded ' + (showCalc ? 'bg-[#dbe6f7] text-brand' : 'bg-brand text-white')} onClick={() => setShowCalc((v) => !v)}><Icon name="calculator" size={15} /></button>{showCalc && <Calculator onClose={() => setShowCalc(false)} />}</div><span className="flex-1" />{selectedProduct && <div className="flex items-center gap-3 border-l border-line pl-3"><span className="max-w-40 truncate text-[12px] font-semibold">{selectedProduct.barcode || selectedProduct.code}</span><ProductImage src={selectedProduct.image} alt={selectedProduct.name} size={72} onOpen={() => setPreviewImage({ src: selectedProduct.image, alt: selectedProduct.name })} /></div>}{/* The four buttons that sat after the Calculator - refresh, register,
           ledger and a chevron - are gone. They carried no onClick at all, so
           every one of them was a dead control: it looked pressable and did
           nothing. The Calculator above is the only one of the five that was
           ever wired, and it stays. */}</div>
       <div className="grid grid-cols-1 gap-2 px-4 md:grid-cols-5"><input className="f-input" type="date" value={saleDate} onChange={(e) => setSaleDate(e.target.value)} /><MultiSelect mode="single" options={salesPeople} value={salesPerson} placeholder="Sales Person" onChange={setSalesPerson} /><div className="flex items-center gap-2 md:col-span-2"><div className="min-w-0 flex-1"><MultiSelect mode="single" options={customerOptions} value={customer} placeholder="Walk-in Customer / phone number" onSearch={setCustomerSearch} onChange={selectCustomer} /></div></div><input className="f-input" value={cashier} readOnly /></div>
-      <div className="mt-2 grid grid-cols-1 items-center gap-2 px-4 md:grid-cols-6"><select className="f-input" value={payMode} onChange={(e) => setPayMode(e.target.value)}>{PAYMENT_MODES.map((mode) => <option key={mode}>{mode}</option>)}</select><div className="relative md:col-span-2"><input ref={scanRef} data-scan-target="" className="f-input" placeholder="Scan barcode, or type a product name / SKU" value={code} onChange={(e) => setCode(e.target.value)} onKeyDown={(e) => { if (['Enter', 'F9', 'Tab'].includes(e.key)) { e.preventDefault(); scan(); } }} />{scanBusy && <span className="absolute right-2 top-2 text-[11px] text-inkmuted">checking...</span>}{itemSuggestions.length > 0 && <div className="absolute left-0 right-0 top-full z-30 mt-1 max-h-64 overflow-auto rounded border border-line bg-white shadow-lg">{itemSuggestions.map((item) => <button type="button" key={item._id} className="flex w-full items-center gap-2 border-b border-line px-3 py-2 text-left text-[12px] hover:bg-[#f4f7fb]" onClick={() => addBarcodeItem(item)}><ProductImage src={item.productImageUrl} alt={item.itemId || item.itemCode} size={44} /><span className="min-w-0 flex-1"><b className="block truncate">{item.itemId || item.description || item.itemCode}</b><span className="text-inkmuted">{item.barcodeNo} · RSP {money(item.rsp)}</span></span></button>)}</div>}</div><select className="f-input" value={counter} onChange={(e) => setCounter(e.target.value)}><option value="">Select Cash Counter</option>{counters.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}</select><div className="flex items-center gap-3 whitespace-nowrap md:col-span-2"><button type="button" className="btn bg-danger px-2 py-1 text-white" title="Process a customer return against a previous bill" onClick={() => router.push(`/admin/transaction/sell/pos-return/add?business=${business}&location=${location}&finYear=${finYear}`)}><Icon name="undo" size={13} /> Return / Refund</button><label className="flex items-center gap-1" title="Take goods back against a previous bill"><input type="checkbox" checked={isExchange} onChange={(e) => { setIsExchange(e.target.checked); setExchangePick(null); setExchangeInvoiceId(''); }} /> Exchange</label></div></div>
+      <div className="mt-2 grid grid-cols-1 items-center gap-2 px-4 md:grid-cols-6"><select className="f-input" value={payMode} onChange={(e) => setPayMode(e.target.value)}>{PAYMENT_MODES.map((mode) => <option key={mode}>{mode}</option>)}</select><div className="relative md:col-span-2"><input ref={scanRef} data-scan-target="" className="f-input" placeholder="Scan barcode, or type a product name / SKU" value={code} onChange={(e) => setCode(e.target.value)} onKeyDown={(e) => { if (['Enter', 'F9', 'Tab'].includes(e.key)) { e.preventDefault(); scan(); } }} />{scanBusy && <span className="absolute right-2 top-2 text-[11px] text-inkmuted">checking...</span>}{itemSuggestions.length > 0 && <div className="absolute left-0 right-0 top-full z-30 mt-1 max-h-64 overflow-auto rounded border border-line bg-white shadow-lg">{itemSuggestions.map((item) => <button type="button" key={item._id} className="flex w-full items-center gap-2 border-b border-line px-3 py-2 text-left text-[12px] hover:bg-[#f4f7fb]" onClick={() => addBarcodeItem(item)}><ProductImage src={item.productImageUrl} alt={item.itemId || item.itemCode} size={44} /><span className="min-w-0 flex-1"><b className="block truncate">{item.itemId || item.description || item.itemCode}</b><span className="text-inkmuted">{item.barcodeNo} · RSP {money(item.rsp)}</span></span></button>)}</div>}</div><select className="f-input" value={counter} onChange={(e) => setCounter(e.target.value)}><option value="">Select Cash Counter</option>{counters.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}</select><div className="flex items-center gap-3 whitespace-nowrap md:col-span-2"><button type="button" className="btn bg-danger px-2 py-1 text-white" title="Process a customer return against a previous bill" onClick={() => router.push(`/admin/transaction/sell/pos-return/add?business=${business}&location=${location}&finYear=${finYear}${customer && customer !== 'walkin' ? '&customer=' + customer : ''}`)}><Icon name="undo" size={13} /> Return / Refund</button><label className="flex items-center gap-1" title="Take goods back against a previous bill"><input type="checkbox" checked={isExchange} onChange={(e) => { setIsExchange(e.target.checked); setExchangePick(null); setExchangeInvoiceId(''); }} /> Exchange</label></div></div>
       {/* The customer summary strip that used to sit here - name, contact id,
           phone, Bills / Spent / Last, and an expandable purchase history - has
           been taken out at the counter's request. Picking a customer now only
@@ -1228,10 +1299,10 @@ export default function PosTill() {
           made on every customer change, which is why the row used to sit on
           "Loading history..." for a moment. */}
       {previewImage && <div className={'fixed inset-0 z-[70] flex items-center justify-center bg-black/75 p-6' + (previewImage.hover ? ' pointer-events-none' : '')} onClick={() => setPreviewImage(null)}><div className="relative max-h-[70vh] max-w-2xl rounded bg-white p-2 shadow-2xl" onClick={(e) => e.stopPropagation()}>{!previewImage.hover && <button type="button" aria-label="Close image preview" className="absolute right-2 top-2 z-10 flex h-8 w-8 items-center justify-center rounded-full bg-black/70 text-white" onClick={() => setPreviewImage(null)}><Icon name="x" size={16} /></button>}<img src={previewImage.src} alt={previewImage.alt} className="max-h-[65vh] max-w-[60vw] object-contain" /></div></div>}
-      {msg && <div className="mx-4 mt-2 flash flash-err">{msg}</div>}
-      <div className="mt-3 flex-1 overflow-x-auto px-4"><table className="dt"><thead><tr>{['#', 'Barcode No', 'Stock', 'Item Code', 'Print Description', 'HSN', 'GST%', 'Qty', 'RSP Price', 'Disc %', 'Disc Amt', 'Line Total', 'Sales Person', 'Image', ''].map((heading) => <th key={heading} className={'!whitespace-normal !leading-tight' + (heading === '#' ? ' !w-9 !px-1.5 !text-left' : '')}>{heading}</th>)}</tr></thead><tbody>{rows.length === 0 ? <tr><td colSpan="15" className="dt-empty">No Items Added</td></tr> : rows.map((row, index) => <tr key={`${row.itemId}-${index}`} className="cursor-pointer !bg-[#FFF3CD]" onClick={() => setSelectedProduct(row)}><td className={'!w-9 !px-1.5 !text-left'}>{index + 1}</td><td className={row.isReturn ? '!text-danger font-semibold' : undefined}>{row.barcode || '-'}</td><td>{/* ONE STOCK COLUMN, two ticks. They were two columns headed Stock Issue and Stock Addition, which read as two unrelated settings when they are one question with two answers - and the pair is already exclusive, so ticking Add clears Issue. Nothing about that changed here; this is the same two checkboxes and the same handler under one heading. The click guard moves to the wrapper so it still covers both, and now the labels too - a label click must tick the box, not select the row behind it. */}<span className="flex items-center justify-center gap-3" onClick={(e) => e.stopPropagation()}><label className="flex cursor-pointer items-center gap-1 leading-none"><input type="checkbox" checked={!!row.stockIssue} onChange={(e) => setStockFlag(index, 'stockIssue', e.target.checked)} /> Issue</label><label className="flex cursor-pointer items-center gap-1 leading-none"><input type="checkbox" checked={!!row.stockAddition} onChange={(e) => setStockFlag(index, 'stockAddition', e.target.checked)} /> Add</label></span></td><td>{row.code}</td><td>{row.description || row.name}</td><td>{row.hsn}</td><td>{money(row.gst)}</td><td>{(() => { const closing = row.closing; const known = closing !== undefined && closing !== null; const over = known && Number(row.qty || 0) > Number(closing); return (<div className="flex flex-col items-center gap-0.5" onClick={(e) => e.stopPropagation()}><div className="flex items-center justify-center gap-1"><button type="button" aria-label="Decrease quantity" className="inline-flex h-[26px] w-[26px] shrink-0 items-center justify-center rounded border border-line bg-pillgrey text-[15px] font-bold leading-none text-ink hover:bg-linestrong disabled:opacity-40" disabled={Number(row.qty || 0) <= 1} onClick={() => updateItem(index, 'qty', Math.max(1, Number(row.qty || 1) - 1))}>-</button><input data-qty-row={index} className={'f-input w-14 text-center' + (over ? ' border-danger text-danger' : '')} type="number" min="1" max={known ? closing : undefined} value={row.qty} onWheel={(e) => e.currentTarget.blur()} onFocus={() => updateItem(index, 'qty', '')} /* min="1" only limits the spinner - a negative can still be typed or pasted, and it flips the whole bill: -222 x 600 billed -133,200.00. Anything below 1 becomes 1. '' is kept so the box can be cleared and retyped, which is what onFocus above relies on. */ onChange={(e) => { const v = e.target.value; updateItem(index, 'qty', v === '' ? '' : (Number(v) < 1 ? 1 : v)); }} /><button type="button" aria-label="Increase quantity" className="inline-flex h-[26px] w-[26px] shrink-0 items-center justify-center rounded border border-line bg-pillgrey text-[15px] font-bold leading-none text-ink hover:bg-linestrong disabled:opacity-40" disabled={known && Number(row.qty || 0) >= Number(closing)} onClick={() => updateItem(index, 'qty', Number(row.qty || 0) + 1)}>+</button></div>{known && <span className={'text-[11px] ' + (over ? 'font-semibold text-danger' : 'text-inkmuted')}>{over ? 'Only ' + closing + ' in stock' : 'Closing: ' + closing}</span>}</div>); })()}</td><td><input className="f-input w-24" type="number" min="0" value={row.rsp} onWheel={(e) => e.currentTarget.blur()} onChange={(e) => updateItem(index, 'rsp', e.target.value)} /></td><td><input className="f-input w-20" type="number" min="0" max="100" value={row.discountPct} onWheel={(e) => e.currentTarget.blur()} /* a discount over 100% turns the line NEGATIVE - the bill then pays the customer. Clamped here as well as with max= because max only stops the spinner, not typing or pasting. */ onChange={(e) => { const v = e.target.value; updateItem(index, 'discountPct', v === '' ? '' : Math.min(100, Math.max(0, Number(v)))); }} /></td><td>{money(row.discountAmount)}</td><td className={row.isReturn ? '!text-danger font-semibold' : undefined}>{money(row.lineTotal)}</td><td><select className="f-input min-w-35" value={row.salesPerson || ''} onChange={(e) => updateItem(index, 'salesPerson', e.target.value)}><option value="">Select...</option>{salesPeople.map((person) => <option key={person.value} value={person.value}>{person.label}</option>)}</select></td><td onMouseEnter={() => row.image && setPreviewImage({ src: row.image, alt: row.name, hover: true })} onMouseLeave={() => setPreviewImage((p) => (p && p.hover ? null : p))}><ProductImage src={row.image} alt={row.name} size={56} onOpen={() => { setSelectedProduct(row); setPreviewImage({ src: row.image, alt: row.name, hover: false }); }} /></td><td><button type="button" className="act-btn bg-danger" onClick={(e) => { e.stopPropagation(); setItems((current) => current.filter((_, itemIndex) => itemIndex !== index)); if (selectedProduct?.itemId === row.itemId) setSelectedProduct(null); }}><Icon name="x" size={12} /></button></td></tr>)}</tbody></table></div>
+      {msg && <div className="mx-4 mt-2 flash flash-err whitespace-pre-line">{msg}</div>}
+      <div className="mt-3 flex-1 overflow-x-auto px-4"><table className="dt"><thead><tr>{['#', 'Stock', 'Barcode No', 'Print Description', 'Item Code', 'HSN', 'GST%', 'Qty', 'UOM', 'RSP Price', 'Disc %', 'Disc Amt', 'Net Amount', 'Sales Person', 'Image', ''].map((heading) => <th key={heading} className={'!whitespace-normal !leading-tight' + (heading === '#' ? ' !w-9 !px-1.5 !text-left' : '')}>{heading}</th>)}</tr></thead><tbody>{rows.length === 0 ? <tr><td colSpan="16" className="dt-empty">No Items Added</td></tr> : rows.map((row, index) => <tr key={`${row.itemId}-${index}`} className={'cursor-pointer ' + (index === activeRow ? '!bg-[#ffe08a] outline outline-2 -outline-offset-2 outline-[#e0a800]' : '!bg-[#FFF3CD]')} onClick={() => { setSelectedProduct(row); setActiveRow(index); }}><td className={'!w-9 !px-1.5 !text-left'}>{index + 1}</td><td>{/* ONE STOCK COLUMN, two ticks. They were two columns headed Stock Issue and Stock Addition, which read as two unrelated settings when they are one question with two answers - and the pair is already exclusive, so ticking Add clears Issue. Nothing about that changed here; this is the same two checkboxes and the same handler under one heading. The click guard moves to the wrapper so it still covers both, and now the labels too - a label click must tick the box, not select the row behind it. */}<span className="flex items-center justify-center gap-3" onClick={(e) => e.stopPropagation()}><label className="flex cursor-pointer items-center gap-1 leading-none"><input type="checkbox" checked={!!row.stockIssue} onChange={(e) => setStockFlag(index, 'stockIssue', e.target.checked)} /> <span className="text-danger" title="Stock Issue" aria-label="Stock Issue"><Icon name="minus" size={14} stroke={2.5} /></span></label><label className="flex cursor-pointer items-center gap-1 leading-none"><input type="checkbox" checked={!!row.stockAddition} onChange={(e) => setStockFlag(index, 'stockAddition', e.target.checked)} /> <span className="text-okgreen" title="Stock Addition" aria-label="Stock Addition"><Icon name="plus" size={14} stroke={2.5} /></span></label></span></td><td className={row.isReturn ? '!text-danger font-semibold' : undefined}>{row.barcode || '-'}</td><td>{row.description || row.name}</td><td>{row.code}</td><td>{row.hsn}</td><td>{gstPct(row.gst)}</td><td>{(() => { const closing = row.closing; const known = closing !== undefined && closing !== null; const over = known && Number(row.qty || 0) > Number(closing); return (<div className="flex flex-col items-center gap-0.5" onClick={(e) => e.stopPropagation()}><div className="flex items-center justify-center gap-1"><button type="button" aria-label="Decrease quantity" className="inline-flex h-[26px] w-[26px] shrink-0 items-center justify-center rounded border border-line bg-pillgrey text-[15px] font-bold leading-none text-ink hover:bg-linestrong disabled:opacity-40" disabled={Number(row.qty || 0) <= 1} onClick={() => updateItem(index, 'qty', Math.max(1, Number(row.qty || 1) - 1))}>-</button><input data-qty-row={index} className={'f-input w-14 text-center' + (over ? ' border-danger text-danger' : '')} type="number" min="1" max={known ? closing : undefined} value={row.qty} onWheel={(e) => e.currentTarget.blur()} onFocus={() => updateItem(index, 'qty', '')} /* Enter finishes the quantity and hands the cursor back to the scan box for the next barcode. A box left empty takes 1 - the line cannot be billed at no quantity. */ onKeyDown={(e) => { if (e.key !== 'Enter') return; e.preventDefault(); if (String(row.qty ?? '').trim() === '') updateItem(index, 'qty', 1); scanRef.current?.focus(); }} /* min="1" only limits the spinner - a negative can still be typed or pasted, and it flips the whole bill: -222 x 600 billed -133,200.00. Anything below 1 becomes 1. '' is kept so the box can be cleared and retyped, which is what onFocus above relies on. */ onChange={(e) => { const v = e.target.value; updateItem(index, 'qty', v === '' ? '' : (Number(v) < 1 ? 1 : v)); }} /><button type="button" aria-label="Increase quantity" className="inline-flex h-[26px] w-[26px] shrink-0 items-center justify-center rounded border border-line bg-pillgrey text-[15px] font-bold leading-none text-ink hover:bg-linestrong disabled:opacity-40" disabled={known && Number(row.qty || 0) >= Number(closing)} onClick={() => updateItem(index, 'qty', Number(row.qty || 0) + 1)}>+</button></div>{known && <span className={'text-[11px] ' + (over ? 'font-semibold text-danger' : 'text-inkmuted')}>{over ? 'Only ' + closing + ' in stock' : 'Closing: ' + closing}</span>}</div>); })()}</td><td>{/* the unit off the barcode row the server resolved, or the item master's for an unbarcoded line; uomType (PC / MTR) when the row carries no text */}{row.uom || row.uomType || '-'}</td><td><input className="f-input w-24" type="number" min="0" step="1" value={row.rsp === '' ? '' : Math.trunc(Number(row.rsp || 0))} onWheel={(e) => e.currentTarget.blur()} /* whole rupees - anything after the point is dropped as it is typed */ onChange={(e) => { const v = e.target.value; updateItem(index, 'rsp', v === '' ? '' : Math.max(0, Math.trunc(Number(v)))); }} /></td><td><input className="f-input w-20" type="number" min="0" max="100" step="1" value={row.discountPct === '' ? '' : Math.trunc(Number(row.discountPct || 0))} onWheel={(e) => e.currentTarget.blur()} /* a discount over 100% turns the line NEGATIVE - the bill then pays the customer. Clamped here as well as with max= because max only stops the spinner, not typing or pasting. */ onChange={(e) => { const v = e.target.value; updateItem(index, 'discountPct', v === '' ? '' : Math.min(100, Math.max(0, Math.trunc(Number(v))))); }} /></td><td>{money(row.discountAmount)}</td><td className={row.isReturn ? '!text-danger font-semibold' : undefined}>{money(row.lineTotal)}</td><td><select className="f-input min-w-35" value={row.salesPerson || ''} onChange={(e) => updateItem(index, 'salesPerson', e.target.value)}><option value="">Select...</option>{salesPeople.map((person) => <option key={person.value} value={person.value}>{person.label}</option>)}</select></td><td onMouseEnter={() => row.image && setPreviewImage({ src: row.image, alt: row.name, hover: true })} onMouseLeave={() => setPreviewImage((p) => (p && p.hover ? null : p))}><ProductImage src={row.image} alt={row.name} size={56} onOpen={() => { setSelectedProduct(row); setPreviewImage({ src: row.image, alt: row.name, hover: false }); }} /></td><td><button type="button" className="act-btn bg-danger" onClick={(e) => { e.stopPropagation(); setItems((current) => current.filter((_, itemIndex) => itemIndex !== index)); setActiveRow((a) => (a === null || a === index ? null : a > index ? a - 1 : a)); if (selectedProduct?.itemId === row.itemId) setSelectedProduct(null); }}><Icon name="x" size={12} /></button></td></tr>)}</tbody></table></div>
       
-      <div className="border-t border-line px-4 pt-2"><div className="grid grid-cols-2 gap-2 text-[13px] md:grid-cols-6"><div><div className="text-cell">Qty</div><div>{qty}</div></div><div><div className="text-cell">Bill Value</div><div>{money(rows.reduce((sum, row) => sum + (row.isReturn ? -1 : 1) * Number(row.rsp || 0) * Number(row.qty || 0), 0))}</div></div><div><div className="text-cell">Total Discount</div><div>{money(rows.reduce((sum, row) => sum + row.discountAmount, 0))}</div></div><div><div className="text-cell">Sub Total</div><div>{money(billValue)}</div></div>
+      <div className="border-t border-line px-4 pt-2">{/* TWO SIDES: the bill totals and the discount / shipping boxes on the LEFT, loyalty on the RIGHT */}<div className="flex flex-col gap-4 md:flex-row md:items-start"><div className="min-w-0 flex-1"><div className="grid grid-cols-2 gap-2 text-[13px] md:grid-cols-6"><div><div className="text-cell">Qty</div><div>{qty}{rows.length > 0 && <span className="ml-2 text-[12px] text-inkmuted">(Pcs {qtyPc} · Mtrs {qtyMtr})</span>}</div></div><div><div className="text-cell">Bill Value</div><div>{money(rows.reduce((sum, row) => sum + (row.isReturn ? -1 : 1) * Number(row.rsp || 0) * Number(row.qty || 0), 0))}</div></div><div><div className="text-cell">Total Discount</div><div>{money(rows.reduce((sum, row) => sum + row.discountAmount, 0))}</div></div><div><div className="text-cell">Sub Total</div><div>{money(billValue)}</div></div>
       
       
       {/* sagar */}
@@ -1240,16 +1311,13 @@ export default function PosTill() {
       {/* new code without tax add on top of bill value */}
       <div><div className="text-cell">Taxable Amt</div><div>{money(taxableAmount)}</div><div className="text-[11px] text-danger">Tax: {money(tax)} (inclusive)</div></div>
       
-      <div><div className="text-cell">Net Amount</div><div className="font-bold text-danger">{money(netAmount)}</div></div></div><div className="mt-2 grid grid-cols-2 gap-2 text-[13px] md:grid-cols-6"><div><div className="text-cell">Line Wise Discount %</div><input className="f-input" type="number" min="0" max="100" step="0.01" value={lineDiscPct} onWheel={(e) => e.currentTarget.blur()} onChange={(e) => applyLineDiscountPct(e.target.value)} /></div><div><div className="text-cell">Line Wise Discount Amt</div><input className="f-input" type="number" min="0" step="0.01" value={lineDiscAmt} onWheel={(e) => e.currentTarget.blur()} onChange={(e) => applyLineDiscountAmt(e.target.value)} /></div><div className="flex items-center gap-2"><span className="text-cell">Shipping</span><button type="button" className="font-semibold text-brand underline" onClick={() => { setShippingDraft(String(shipping || 0)); setShowShipping(true); }}>( + ) {money(shipping)}</button></div>{/* LOYALTY, on the right of the footer - beneath Taxable Amt and Net
-              Amount, which are the other two figures that decide what is
-              collected. It fills columns 4 to 6 of this same six-column row,
-              so it lines up with the totals above instead of sitting in a band
-              of its own across the screen.
+      <div><div className="text-cell">Net Amount</div><div className="font-bold text-danger">{money(netAmount)}</div></div></div><div className="mt-2 grid grid-cols-2 gap-2 text-[13px] md:grid-cols-6"><div><div className="text-cell">Line Wise Discount %</div><input className="f-input" type="number" min="0" max="100" step="0.01" value={lineDiscPct} onWheel={(e) => e.currentTarget.blur()} onChange={(e) => applyLineDiscountPct(e.target.value)} /></div><div><div className="text-cell">Line Wise Discount Amt</div><input className="f-input" type="number" min="0" step="0.01" value={lineDiscAmt} onWheel={(e) => e.currentTarget.blur()} onChange={(e) => applyLineDiscountAmt(e.target.value)} /></div><div className="flex items-center gap-2"><span className="text-cell">Shipping</span><button type="button" className="font-semibold text-brand underline" onClick={() => { setShippingDraft(String(shipping || 0)); setShowShipping(true); }}>( + ) {money(shipping)}</button></div></div></div><div className="shrink-0 md:w-[420px]">{/* LOYALTY, on the right-hand side of the footer, beside the bill
+              totals rather than in a row beneath them.
 
               Renders only where loyalty is switched on for the business, so a
               till that has never configured it looks exactly as it did. */}
           {loyalty && (
-            <div className="text-[12.5px] md:col-span-3 md:justify-self-end md:text-right">
+            <div className="text-[12.5px] md:text-right">
               {customer === 'walkin' ? (
                 /* Nobody to credit. Said plainly rather than hidden, so the
                    cashier knows the points are there to be had if they name
@@ -1313,7 +1381,7 @@ export default function PosTill() {
                 </>
               )}
             </div>
-          )}</div></div>
+          )}</div></div></div>
       <div className="mt-2 flex flex-wrap items-center gap-3 bg-[#eef1f7] px-4 py-3"><button type="button" className="btn bg-[#17a2b8] text-white disabled:opacity-50" disabled={holding} onClick={holdBill}><Icon name="register" size={14} /> {holding ? 'Holding...' : 'Hold'}</button><button type="button" className="btn bg-[#6b7280] text-white disabled:opacity-50" disabled={!holds.length} onClick={() => setShowHolds(true)}><Icon name="register" size={14} /> Held ({holds.length})</button><button type="button" className="btn bg-[#2563a9] text-white" onClick={() => setShowMultiplePay(true)}><Icon name="register" size={14} /> Multiple Pay</button><span className="text-[15px] font-bold">Total Payable: <span className="text-okgreen">{money(payableAfterPoints)}</span>{redeemAmount > 0 && <span className="ml-2 text-[12px] font-normal text-inkmuted">(net {money(netAmount)} - loyalty {money(redeemAmount)})</span>}</span><button type="button" className="btn bg-[#f2a19b] text-white" onClick={clearTill}><Icon name="x" size={14} /> Clear Screen</button><span className="flex-1" /><button type="button" className="btn btn-primary" onClick={() => router.push('/admin/transaction/sell/pos')}>Recent Transactions</button></div>
       {showMultiplePay && <MultiplePayDialog totalItems={qty} /* WHAT IS LEFT TO COLLECT, not the value of the goods. Redeemed points are a payment the server adds on top of whatever is taken here (see app/api/sell-pos/route.js), so handing this the full figure would have the cashier collect 1000 in cash on a 1000 bill already part-settled by 300 points - and the customer would pay 1300. */ totalPayable={payableAfterPoints} onClose={() => setShowMultiplePay(false)} onSubmit={submitPayment} />}
 
