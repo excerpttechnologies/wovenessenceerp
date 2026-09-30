@@ -1,6 +1,7 @@
 'use client';
 import { useEffect, useState } from 'react';
 import Icon from './Icon';
+import { shareInstagram } from '@/lib/shareRoutes';
 
 /* ==========================================================================
    SHARE ONE DOCUMENT - WhatsApp, Email, Download, Print.
@@ -141,27 +142,9 @@ export default function ShareDocDialog({
   async function instagramShare() {
     setError('');
     setNotice('');
-    /* a phone: the system share sheet lists Instagram among its targets */
-    if (typeof navigator !== 'undefined' && navigator.share && /Android|iPhone|iPad/i.test(navigator.userAgent || '')) {
-      try {
-        await navigator.share({ title: subject, text: message });
-        return;
-      } catch (e) {
-        if (e && e.name === 'AbortError') return;   // the operator closed the sheet
-      }
-    }
-    /* a desktop: copy, then open Direct for pasting */
-    try {
-      await navigator.clipboard.writeText(message);
-    } catch {
-      setError('Could not copy the message - open "Message being sent" below and copy it, then paste it into Instagram.');
-      return;
-    }
-    const win = window.open('https://www.instagram.com/direct/inbox/', '_blank');
-    if (win) { try { win.opener = null; } catch { /* cross-origin */ } }
-    setNotice(win
-      ? 'Message copied. Instagram opened - pick the person and paste it (Ctrl+V).'
-      : 'Message copied. Open Instagram and paste it into the chat (Ctrl+V).');
+    const res = await shareInstagram(subject, message);
+    if (res.error) setError(res.error + ' Open "Message being sent" below and copy it instead.');
+    else if (res.notice) setNotice(res.notice);
   }
 
   async function copyMessage() {

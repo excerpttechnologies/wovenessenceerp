@@ -90,6 +90,7 @@
     "ic:receive-pending:apply": "node --env-file=.env --import ./scripts/aliasRegister.mjs scripts/receivePendingIcChallans.mjs --apply"
   },
   "dependencies": {
+    "fs": "^0.0.1-security",
     "html5-qrcode": "^2.3.8",
     "jsbarcode": "^3.12.3",
     "lucide-react": "^1.33.0",
@@ -99,6 +100,7 @@
     "react": "19.0.0",
     "react-dom": "19.0.0",
     "react-icons": "^5.7.0",
+    "tesseract.js": "^7.0.0",
     "xlsx": "^0.18.5"
   },
   "devDependencies": {

@@ -5,6 +5,7 @@ import Business from '@/models/Business';
 import CompanyLocation from '@/models/CompanyLocation';
 import { Customer } from '@/lib/contacts';
 import PosCounter from '@/models/PosCounter';
+import SalesPerson from '@/models/SalesPerson';
 import StockAdjustment from '@/models/StockAdjustment';
 import { requireSession } from '@/lib/session';
 import { resolveRefLabels } from '@/lib/refLabels';
@@ -244,12 +245,18 @@ export async function GET(req) {
     .limit(perPage)
     .lean();
 
-  const [businesses, locations, customers, counters] = await Promise.all([
+  /* The sales person sits on each LINE (the till's Sales Person column), as
+     a Staff Management -> Sales Persons id - one lookup for the whole page. */
+  const spIds = [...new Set(rows.flatMap((r) => (r.items || []).map((l) => String(l.salesPerson || ''))).filter((v) => isValidObjectId(v)))];
+
+  const [businesses, locations, customers, counters, salesPeople] = await Promise.all([
     Business.find({ _id: { $in: rows.map((r) => r.businessId).filter(Boolean) } }).select('_id name businessPrintName').lean(),
     CompanyLocation.find({ _id: { $in: rows.map((r) => r.locationId).filter(Boolean) } }).select('_id name businessPrintName').lean(),
     Customer.find({ _id: { $in: rows.map((r) => r.customerId).filter(Boolean) } }).select('_id businessName firstName middleName lastName billingMobile').lean(),
     PosCounter.find({ _id: { $in: rows.map((r) => r.counterId).filter(Boolean) } }).select('_id counterName').lean(),
+    spIds.length ? SalesPerson.find({ _id: { $in: spIds } }).select('_id name').lean() : [],
   ]);
+  const spName = new Map(salesPeople.map((p) => [String(p._id), p.name || '']));
   const byId = (list) => new Map(list.map((item) => [String(item._id), item]));
   const businessById = byId(businesses);
   const locationById = byId(locations);
@@ -267,6 +274,10 @@ export async function GET(req) {
         counterName: counterById.get(String(r.counterId))?.counterName || '',
         customerName: customer ? customer.businessName || [customer.firstName, customer.middleName, customer.lastName].filter(Boolean).join(' ') : r.customerSnapshot?.businessName || [r.customerSnapshot?.firstName, r.customerSnapshot?.middleName, r.customerSnapshot?.lastName].filter(Boolean).join(' ') || 'Walk-in Customer',
         customerContact: r.customerContact || customer?.billingMobile || r.customerSnapshot?.billingMobile || '',
+        /* every sales person on the bill, once each */
+        salesPersonName: [...new Set((r.items || []).map((l) => spName.get(String(l.salesPerson || ''))).filter(Boolean))].join(', '),
+        /* the number of lines on the bill */
+        totalItems: (r.items || []).length,
       };
     }),
     labels: await resolveRefLabels(rows),

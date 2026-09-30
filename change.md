@@ -1,5 +1,51 @@
 # Changes
 
+## 30-09-2026
+
+### NEW
+
+- lib/shareRoutes.js
+
+### EXISTING
+
+- app/admin/transaction/sell/pos/page.jsx
+- app/admin/transaction/sell/pos/print/[id]/page.jsx
+- app/admin/transaction/sell/pos-return/add/page.jsx
+- app/api/sell-pos/[id]/route.js
+- app/api/sell-pos/route.js
+- components/PosTill.jsx
+- components/PosReturnForm.jsx
+- components/PosInvoiceView.jsx
+- components/ShareDocDialog.jsx
+- components/ListView.jsx
+- components/Icon.jsx
+
+## 29-09-2026
+
+### NEW
+
+- components/PosInvoiceView.jsx
+- components/PosPaymentsView.jsx
+
+### EXISTING
+
+- app/admin/pos/add/page.jsx
+- app/admin/transaction/sell/pos/page.jsx
+- app/admin/transaction/sell/pos/payment/[id]/page.jsx
+- app/admin/transaction/sell/pos/print/[id]/page.jsx
+- app/admin/transaction/sell/pos/view/[id]/page.jsx
+- app/api/sell-pos/route.js
+- app/api/sell-pos/[id]/route.js
+- app/api/sell-pos-return/lookup/route.js
+- components/PosTill.jsx
+- components/PosReturnForm.jsx
+- components/MultiplePayDialog.jsx
+- components/ShareDocDialog.jsx
+- components/ListView.jsx
+- components/Icon.jsx
+- lib/format.js
+- lib/inventory.js
+
 ## 28-09-2026
 
 ### NEW

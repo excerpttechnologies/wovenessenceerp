@@ -75,7 +75,9 @@ export default function PosReturnForm() {
   }, [lookup]);
 
   /* --------------------------------------------------------- find sale -- */
-  const find = useCallback(async (text, byBarcode = false) => {
+  /* `selectAll` ticks every line still returnable - used when a bill is
+     picked from the customer's list, so it can be submitted straight away */
+  const find = useCallback(async (text, byBarcode = false, selectAll = false) => {
     const term = String(text || '').trim();
     if (!term) return;
     setLoading(true);
@@ -91,7 +93,9 @@ export default function PosReturnForm() {
          spelling the label carried */
       const line = byBarcode ? await lineFor(d.lines, term) : null;
       setSale(d);
-      setPicked(line && line.returnable ? [line.barcodeNo] : []);
+      setPicked(selectAll
+        ? (d.lines || []).filter((l) => l.returnable && l.barcodeNo).map((l) => l.barcodeNo)
+        : (line && line.returnable ? [line.barcodeNo] : []));
       setRefundAmount('');
       beep('ok');
     } catch {
@@ -130,8 +134,12 @@ export default function PosReturnForm() {
       return;
     }
     setPickedBill(bill._id);
-    setQuery(bill.invoiceNo);
-    find(bill.invoiceNo);
+    /* The search box is left alone - it stays for looking a bill up by
+       number or scan. Ticking a bill loads it below with every returnable
+       line already selected, so the return can be confirmed straight away;
+       the operator can still untick a line that is staying with the
+       customer. */
+    find(bill.invoiceNo, false, true);
   }
 
   /* A scan either finds the sale (nothing loaded yet) or ticks a line on the

@@ -71,6 +71,24 @@ export async function GET(req, { params }) {
     customerContact: doc.customerContact || customerData?.billingMobile || '',
     customerAddress: customerData ? [customerData.billingAddressLine1, customerData.billingCity, customerData.billingDistrict, customerData.billingTaluk, customerData.billingState, customerData.billingCountry, customerData.billingZipCode].filter(Boolean).join(', ') : '',
     counterName: counter?.counterName || '',
+    /* THE LETTERHEAD for the printed invoice - the selling location's own
+       address, phones, GSTIN and terms, falling back to the business for
+       whatever the location leaves blank. */
+    seller: {
+      name: location?.businessPrintName || location?.name || business?.businessPrintName || business?.name || '',
+      addressLine1: location?.addressLine1 || business?.addressLine1 || '',
+      addressLine2: location?.addressLine2 || business?.addressLine2 || '',
+      landmark: location?.landmark || '',
+      city: location?.city || business?.city || '',
+      state: location?.state || business?.state || '',
+      zipCode: location?.zipCode || business?.zipCode || '',
+      mobile: location?.mobile || business?.mobile || '',
+      alternate: location?.alternateContactNumber || '',
+      email: location?.email || business?.email || '',
+      gstin: location?.gstin || business?.gstin || '',
+      terms: location?.termsAndConditions || '',
+    },
+    customerGstn: customerData?.gstNo || '',
     items,
     salesPersonName: salesPersonNames.join(', '),
     status: doc.paymentStatus === 'Paid' ? 'FINALIZED' : doc.paymentStatus || 'DRAFT',

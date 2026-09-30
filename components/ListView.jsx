@@ -2008,7 +2008,13 @@ export default function ListView({ cfg, slug, reloadKey = 0 }) {
       {cfg.summaryCards && state.summary && (
         <div className="mb-3 grid grid-cols-2 gap-3 md:grid-cols-4">
           {cfg.summaryCards.map((c) => (
-            <div key={c.k} className="card px-4 py-3">
+            <div
+              key={c.k}
+              /* `breakdownSide: 'right'` puts the breakdown BESIDE the
+                 figure, in the card's right half, instead of under it */
+              className={'card px-4 py-3' + (c.breakdownSide === 'right' ? ' flex items-center gap-4' : '')}
+            >
+              <div className={c.breakdownSide === 'right' ? 'min-w-0 flex-1' : undefined}>
               <div className="text-[11px] font-semibold uppercase tracking-wide text-inkmuted">
                 {c.label}
               </div>
@@ -2019,12 +2025,17 @@ export default function ListView({ cfg, slug, reloadKey = 0 }) {
                   ? Math.trunc(Number(state.summary[c.k] || 0))
                   : (state.summary[c.k] ?? 0)}
               </div>
+              </div>
               {/* optional breakdown under the figure - cfg.summaryCards
                   `breakdown` names a summary key holding [{ label, amount }] */}
               {c.breakdown && Array.isArray(state.summary[c.breakdown]) && (
-                <div className="mt-1.5 space-y-0.5 border-t border-line pt-1.5 text-[12px]">
+                <div className={c.breakdownSide === 'right'
+                  /* a two-column grid: each amount sits right after its
+                     label, not pushed to the far edge of the card */
+                  ? 'grid grid-cols-[auto_auto] items-baseline gap-x-2 gap-y-0.5 border-l border-line pl-4 text-[12px]'
+                  : 'mt-1.5 space-y-0.5 border-t border-line pt-1.5 text-[12px]'}>
                   {state.summary[c.breakdown].map((b) => (
-                    <div key={b.label} className="flex justify-between gap-3">
+                    <div key={b.label} className={c.breakdownSide === 'right' ? 'contents' : 'flex justify-between gap-3'}>
                       <span className="text-inkmuted">{b.label}</span>
                       <span className="font-semibold text-ink">
                         {c.f === "wholeAmount"

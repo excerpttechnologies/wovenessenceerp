@@ -131,9 +131,9 @@ const CONFIG = {
   summaryCards: [
     { k: 'count', label: 'Total Invoices' },
     { k: 'totalAmount', label: 'Total Amount', f: 'wholeAmount' },
-    { k: 'paid', label: 'Collected', f: 'wholeAmount', breakdown: 'paidBy' },
+    { k: 'paid', label: 'Collected', f: 'wholeAmount', breakdown: 'paidBy', breakdownSide: 'right' },
     // { k: 'sellDue', label: 'Outstanding', f: 'wholeAmount' },
-    { k: 'totalQty', label: 'Qty Sold', f: 'qty', breakdown: 'qtyBy' },
+    { k: 'totalQty', label: 'Qty Sold', f: 'qty', breakdown: 'qtyBy', breakdownSide: 'right' },
   ],
   filters: [
     { k: "invoiceNo", label: "Invoice No", type: "text" },
@@ -153,6 +153,10 @@ const CONFIG = {
     { k: "counterName", t: "Counter" },
     { k: "customerName", t: "Customer Name" },
     { k: "customerContact", t: "Customer Contact" },
+    /* who sold it - every sales person on the bill's lines, once each */
+    { k: "salesPersonName", t: "Sales Person" },
+    /* how many lines the bill carries */
+    { k: "totalItems", t: "Total Items" },
     // { k: "exempted", t: "Exempted", f: "yesno" },
     // { k: "billingType", t: "Billing Type" },
     // { k: "paymentStatus", t: "Payment Status" },
@@ -183,8 +187,8 @@ const CONFIG = {
         );
       },
     },
-    { k: "paid", t: "Paid", f: "wholeAmount" },
-     { k: "sellDue", t: "Sell Due", f: "wholeAmount" },
+    // { k: "paid", t: "Paid", f: "wholeAmount" },
+    //  { k: "sellDue", t: "Sell Due", f: "wholeAmount" },
   ],
 };
 
