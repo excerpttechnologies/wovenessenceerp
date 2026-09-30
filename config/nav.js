@@ -480,6 +480,11 @@ export const NAV = [
         href: '/admin/transaction/intercompanysell/deliverychallan' },
       { label: 'Receive Delivery Challan', icon: LuPackageCheck,
         href: '/admin/transaction/intercompanysell/receivedeliverychallan' },
+      /* Consignment billing: the sender invoices the units its receivers
+         have SOLD - not the whole challan, which is what the older hidden
+         salesinvoice screen below did. */
+      { label: 'Sales Invoice', icon: LuFileText,
+        href: '/admin/transaction/intercompanysell/sales-invoice' },
       // { label: 'Sales Invoice', icon: LuFileText,
       //   href: '/admin/transaction/intercompanysell/salesinvoice' },
       // { label: 'Auto Purchases Received', icon: LuPackageCheck,

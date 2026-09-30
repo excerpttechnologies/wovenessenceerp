@@ -363,7 +363,10 @@ export const POST = handler(async (req) => {
   let redeemAmount = 0;
 
   if (rules && doc.customerId && wantsPoints > 0) {
-    const balance = await pointsBalance({ businessId: doc.businessId, customerId: doc.customerId });
+    /* points earned TODAY spend from TOMORROW - the ceiling leaves them out */
+    const balance = await pointsBalance({
+      businessId: doc.businessId, customerId: doc.customerId, excludeEarnedToday: true,
+    });
     const allowed = allowedRedemption({ rules, balance, billAmount: doc.totalAmount });
 
     /* Asked for more than the rules or the balance permit. Refused outright

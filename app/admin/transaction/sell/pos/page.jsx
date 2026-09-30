@@ -78,7 +78,52 @@ const payModes = (row) => {
     .map((p) => String(p.method || '').trim())
     .filter(Boolean);
   const unique = [...new Set(used)];
-  return unique.length ? unique.join(' + ') : String(row.billingType || '').trim();
+  return unique.length ? unique : (String(row.billingType || '').trim() ? [String(row.billingType || '').trim()] : []);
+};
+
+/* The mark each method shows as (user, 30-09-2026: icons, not the
+   "CASH + UPI/CARD" text). Matched loosely because the names are free text
+   on the payments rows; a method none of these fit keeps its name as a tiny
+   label rather than being dropped. */
+const methodIcon = (method) => {
+  const m = method.toLowerCase();
+  if (m.includes('loyalty') || m.includes('point')) return { icon: 'star', bg: '#f59e0b' };
+  if (m.includes('upi') || m.includes('card') || m.includes('paytm') || m.includes('phonepe') || m.includes('gpay')) return { icon: 'card', bg: '#2563a9' };
+  if (m.includes('bank') || m.includes('deposit')) return { icon: 'bank', bg: '#7c3aed' };
+  if (m.includes('cash')) return { icon: 'cash', bg: '#16a34a' };
+  return null;
+};
+
+const PayMarks = ({ row }) => {
+  const modes = payModes(row);
+  if (!modes.length) return null;
+  return (
+    <span className="inline-flex items-center gap-1">
+      {modes.map((method) => {
+        const mark = methodIcon(method);
+        /* a small coloured chip per method - green cash, blue card, violet
+           bank, amber points - with the exact name on hover. A method none
+           of them fit keeps its name in a grey pill rather than vanishing. */
+        return mark
+          ? (
+            <span
+              key={method}
+              title={method}
+              aria-label={method}
+              className="inline-flex h-[18px] w-[18px] items-center justify-center rounded-full text-white"
+              style={{ backgroundColor: mark.bg }}
+            >
+              <Icon name={mark.icon} size={11} stroke={2} />
+            </span>
+          )
+          : (
+            <span key={method} title={method} className="rounded-full bg-pillgrey px-1.5 text-[9.5px] font-semibold uppercase text-inkmuted">
+              {method}
+            </span>
+          );
+      })}
+    </span>
+  );
 };
 
 /* HOW MUCH OF IT HAS BEEN COLLECTED.
@@ -154,9 +199,10 @@ const CONFIG = {
     { k: "customerName", t: "Customer Name" },
     { k: "customerContact", t: "Customer Contact" },
     /* who sold it - every sales person on the bill's lines, once each */
-    { k: "salesPersonName", t: "Sales Person" },
+    
     /* how many lines the bill carries */
-    { k: "totalItems", t: "Total Items" },
+    // { k: "totalItems", t: "Total Items" },
+    // { k: "salesPersonName", t: "Sales Person" },
     // { k: "exempted", t: "Exempted", f: "yesno" },
     // { k: "billingType", t: "Billing Type" },
     // { k: "paymentStatus", t: "Payment Status" },
@@ -168,7 +214,6 @@ const CONFIG = {
       t: " Amount",
       f: "wholeAmount",
       render: (r) => {
-        const mode = payModes(r);
         const status = String(r.paymentStatus || '').trim();
         const look = PAID_LOOK[status.toLowerCase()] || { tick: false, className: 'text-inkmuted' };
         return (
@@ -182,11 +227,14 @@ const CONFIG = {
                 {status}
               </span>
             )}
-            {mode && <span className="text-[11px] text-inkmuted">{mode}</span>}
+            <PayMarks row={r} />
           </span>
         );
       },
     },
+
+     { k: "totalItems", t: "Total Items" },
+    { k: "salesPersonName", t: "Sales Person" },
     // { k: "paid", t: "Paid", f: "wholeAmount" },
     //  { k: "sellDue", t: "Sell Due", f: "wholeAmount" },
   ],

@@ -40,12 +40,23 @@ export async function GET(req) {
   /* A walk-in has nobody to credit. The rules still come back so the till can
      say what a named customer WOULD earn, but the balance is zero. */
   const balance = customer ? await pointsBalance({ businessId: sp.get('business'), customerId: customer }) : 0;
-  const allowed = allowedRedemption({ rules, balance, billAmount: amount });
+  /* points earned TODAY spend from TOMORROW - the redemption ceiling is
+     worked on the balance without them, while `balance` above stays the
+     full figure for display */
+  const redeemable = customer
+    ? await pointsBalance({ businessId: sp.get('business'), customerId: customer, excludeEarnedToday: true })
+    : 0;
+  const allowed = allowedRedemption({ rules, balance: redeemable, billAmount: amount });
+  const todayLockedPoints = Math.max(0, balance - redeemable);
 
   return json({
     active: true,
     name: rules.name,
     pointsToInr: rules.pointsToInr,
+    /* the six-field master's earning model, for the till's preview */
+    perAmountModel: rules.hasPerAmount,
+    purchaseAmountForOnePoint: rules.purchaseAmountForOnePoint,
+    otpRequired: rules.otpRequired,
     earningPercentage: rules.earningPercentage,
     minPurchaseAmount: rules.minPurchaseAmount,
     maxRewardPoint: rules.maxRewardPoint,
@@ -54,8 +65,11 @@ export async function GET(req) {
     minAmountForRedemption: rules.minAmountForRedemption,
     balance,
     balanceValue: balance * rules.pointsToInr,
+    todayLockedPoints,
     allowedPoints: allowed.points,
     allowedAmount: allowed.amount,
-    reason: allowed.reason,
+    reason: allowed.points === 0 && todayLockedPoints > 0 && balance > 0
+      ? 'Points earned today can be redeemed from tomorrow.'
+      : allowed.reason,
   });
 }

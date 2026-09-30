@@ -36,6 +36,11 @@ const P = {
   share: 'M18 8a2.5 2.5 0 100-5 2.5 2.5 0 000 5zM6 14.5a2.5 2.5 0 100-5 2.5 2.5 0 000 5zM18 21a2.5 2.5 0 100-5 2.5 2.5 0 000 5zM8.2 10.8l7.6-3.9M8.2 13.2l7.6 3.9',
   plus: 'M12 5v14M5 12h14',
   minus: 'M5 12h14',
+  /* payment-method marks on the POS list's Amount column */
+  cash: 'M3 7h18v10H3zM12 14.5a2.5 2.5 0 100-5 2.5 2.5 0 000 5zM6 12h.01M18 12h.01',
+  card: 'M3 6h18v12H3zM3 10h18M6 15h4',
+  bank: 'M3 9l9-6 9 6M4 9v9M8.5 9v9M15.5 9v9M20 9v9M2.5 20.5h19',
+  star: 'M12 3l2.7 5.6 6.1.8-4.5 4.2 1.1 6-5.4-3-5.4 3 1.1-6L3.2 9.4l6.1-.8z',
   /* speech bubble with a handset - the WhatsApp route */
   whatsapp: 'M3.5 20.5l1.3-4A8.5 8.5 0 1112 20.5a8.5 8.5 0 01-4-1zM9 8.5c0 3 3.5 6.5 6.5 6.5l1-1.5-2-1-1 1c-1-.5-2-1.5-2.5-2.5l1-1-1-2z',
   /* camera outline - the Instagram route on the share dialog */

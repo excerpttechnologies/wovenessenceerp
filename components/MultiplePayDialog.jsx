@@ -12,14 +12,11 @@ import Icon from '@/components/Icon';
    Opens blank for a new bill, or seeded from `initialPayments` when editing
    one that has already been paid. */
 
-/* The methods every bill offers. Anything else - PhonePe, GPay, a card
-   machine - is added on the spot with the + button and travels with the
-   invoice, so this list stays short rather than trying to name every wallet. */
+/* The methods every bill offers. A split across two UPI apps is two
+   UPI/Card rows - the + on that row adds another one - rather than a wallet
+   picked by name (user, 30-09-2026: no PayTM / PhonePe / GPay menu). */
 const UPI_METHOD = 'UPI/Card';
 const MULTI_PAYMENT_METHODS = ['Cash', UPI_METHOD, 'Bank Deposit'];
-/* The wallets offered behind the + on the UPI row. They are all UPI, so they
-   sit under it rather than cluttering the main list. */
-const UPI_PROVIDERS = ['PayTM', 'PhonePe', 'GPay'];
 
 /* whole rupees, as on the till and the POS list */
 const money = (value) => String(Math.trunc(Number(value || 0)));
@@ -46,44 +43,41 @@ export default function MultiplePayDialog({
   const [payments, setPayments] = useState(() => {
     const same = sameMethod;
 
+    /* Each stored payment row fills AT MOST ONE row here, by position - a
+       bill split across two UPI/Card rows must come back as two rows, not
+       one. `used` marks the stored rows the base list has consumed. */
+    const used = new Set();
     const base = MULTI_PAYMENT_METHODS.map((method) => {
-      const existing = initialPayments.find((p) => same(p.method, method));
+      const at = initialPayments.findIndex((p, i) => !used.has(i) && same(p.method, method));
+      if (at > -1) used.add(at);
+      const existing = at > -1 ? initialPayments[at] : null;
       return { method, amount: existing ? String(existing.amount ?? '') : '', note: existing?.note || '', custom: false };
     });
 
-    /* Anything already on the invoice under a name this list does not carry
-       gets its own row. Without this an older bill paid by "PayTM" - the name
-       this dialog used before - would vanish from the form and be wiped the
-       moment it was saved, because only rows with an amount are kept. */
+    /* Everything left over keeps its own row: a second UPI/Card split, or an
+       older bill paid under a name this list no longer carries ("PayTM").
+       Dropping them would wipe that money on the next save, because only
+       rows with an amount are kept. */
     const extras = initialPayments
-      .filter((p) => !MULTI_PAYMENT_METHODS.some((m) => same(m, p.method)))
+      .filter((p, i) => !used.has(i))
       .map((p) => ({ method: p.method || '', amount: String(p.amount ?? ''), note: p.note || '', custom: true }));
 
     return insertUnderUpi(base, extras);
   });
-  const [selectedMethod, setSelectedMethod] = useState(
-    () => initialPayments.find((p) => Number(p.amount || 0) > 0)?.method || ''
+  /* the radio's choice, BY ROW - two rows can share the UPI/Card name */
+  const [selectedIndex, setSelectedIndex] = useState(
+    () => initialPayments.findIndex((p) => Number(p.amount || 0) > 0)
   );
-  const [showUpiMenu, setShowUpiMenu] = useState(false);
   const [sellNote, setSellNote] = useState(initialSellNote);
   const [staffNote, setStaffNote] = useState(initialStaffNote);
-  /* wallets not already on the bill */
-  const upiChoices = UPI_PROVIDERS.filter(
-    (n) => !payments.some((p) => String(p.method).toLowerCase() === n.toLowerCase())
-  );
   const totalPaying = payments.reduce((sum, payment) => sum + Number(payment.amount || 0), 0);
   const changeReturn = Math.max(0, totalPaying - totalPayable);
   const balance = Math.max(0, totalPayable - totalPaying);
 
-  /* Adds a wallet as its own row. Already-present ones are filtered out of the
-     menu, so the same provider cannot be added twice. */
-  function addProvider(name) {
-    setShowUpiMenu(false);
-    setPayments((current) => (
-      current.some((p) => sameMethod(p.method, name))
-        ? current
-        : insertUnderUpi(current, [{ method: name, amount: '', note: '', custom: true }])
-    ));
+  /* The + on the UPI/Card row: one more UPI/Card row, right under it - for a
+     bill split across two UPI payments. Removable, like any added row. */
+  function addUpiRow() {
+    setPayments((current) => insertUnderUpi(current, [{ method: UPI_METHOD, amount: '', note: '', custom: true }]));
   }
 
   function removeMethod(index) {
@@ -101,10 +95,10 @@ export default function MultiplePayDialog({
 
      Split payments still work - type into a second row after choosing, and
      Total Paying / Balance add up as before. */
-  function chooseMethod(method) {
-    setSelectedMethod(method);
-    setPayments((current) => current.map((payment) => (
-      payment.method === method
+  function chooseMethod(index) {
+    setSelectedIndex(index);
+    setPayments((current) => current.map((payment, i) => (
+      i === index
         ? { ...payment, amount: String(totalPayable) }
         : { ...payment, amount: '' }
     )));
@@ -123,33 +117,22 @@ export default function MultiplePayDialog({
             <div className="grid grid-cols-[1fr_1fr_1.5fr_auto] border-b border-line px-2 py-2 text-[12px] font-semibold text-inkmuted"><span>Method *</span><span>Amount</span><span>Payment note</span></div>
             {payments.map((payment, index) => (
               <div className="grid grid-cols-[1fr_1fr_1.5fr_auto] items-center gap-2 border-b border-line px-2 py-2" key={index}>
-                <label className={'flex cursor-pointer items-center text-[13px] ' + (selectedMethod === payment.method ? 'font-bold text-brand' : 'font-semibold text-ink')}>
-                  <input type="radio" name="pos-pay-method" className="sr-only" checked={selectedMethod === payment.method} onChange={() => chooseMethod(payment.method)} />
+                <label className={'flex cursor-pointer items-center text-[13px] ' + (selectedIndex === index ? 'font-bold text-brand' : 'font-semibold text-ink')}>
+                  <input type="radio" name="pos-pay-method" className="sr-only" checked={selectedIndex === index} onChange={() => chooseMethod(index)} />
                   {payment.method}
                 </label>
 
                 <input className="f-input" type="number" min="0" step="0.01" placeholder="Enter amount" value={payment.amount} onChange={(event) => updatePayment(index, 'amount', event.target.value)} onWheel={(e) => e.currentTarget.blur()} />
                 <input className="f-input" placeholder="Payment note" value={payment.note} onChange={(event) => updatePayment(index, 'note', event.target.value)} />
 
-                {/* row action: + opens the wallet menu on the UPI row, X drops a
-                    wallet that was added from it. Every other row keeps an empty
-                    cell so the three inputs stay aligned down the column. */}
+                {/* row action: + on the base UPI/Card row adds another
+                    UPI/Card row, X drops an added one. Every other row keeps
+                    an empty cell so the inputs stay aligned down the column. */}
                 <span className="relative flex w-6 justify-center">
-                  {sameMethod(payment.method, UPI_METHOD) && (
-                    <>
-                      <button type="button" aria-label="Add UPI provider" title="Add a UPI provider" className="inline-flex h-6 w-6 items-center justify-center rounded border border-line bg-pillgrey text-ink hover:bg-linestrong" onClick={() => setShowUpiMenu((v) => !v)}>
-                        <Icon name="plus" size={12} />
-                      </button>
-                      {showUpiMenu && (
-                        <span className="absolute right-0 top-full z-20 mt-1 block w-32 overflow-hidden rounded border border-line bg-white shadow-pop">
-                          {upiChoices.length === 0
-                            ? <span className="block px-2 py-1.5 text-[12px] text-inkmuted">All added</span>
-                            : upiChoices.map((name) => (
-                              <button type="button" key={name} className="block w-full px-2 py-1.5 text-left text-[12.5px] hover:bg-[#f2f6fc]" onClick={() => addProvider(name)}>{name}</button>
-                            ))}
-                        </span>
-                      )}
-                    </>
+                  {sameMethod(payment.method, UPI_METHOD) && !payment.custom && (
+                    <button type="button" aria-label="Add another UPI/Card row" title="Add another UPI/Card row" className="inline-flex h-6 w-6 items-center justify-center rounded border border-line bg-pillgrey text-ink hover:bg-linestrong" onClick={addUpiRow}>
+                      <Icon name="plus" size={12} />
+                    </button>
                   )}
                   {payment.custom && (
                     <button type="button" aria-label="Remove method" title="Remove" className="act-btn bg-danger" onClick={() => removeMethod(index)}>

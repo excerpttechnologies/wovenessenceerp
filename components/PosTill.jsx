@@ -1255,9 +1255,16 @@ export default function PosTill() {
      ledger. Worked on the payable rather than the bill, because spending
      points does not earn more of them. */
   const earnPreview = (() => {
-    if (!loyalty || customer === 'walkin') return 0;
+    if (!loyalty || customer === 'walkin' || payableAfterPoints <= 0) return 0;
+    /* the six-field master: one point per every purchaseAmountForOnePoint
+       rupees. The percentage arithmetic below only serves a config saved
+       before that master and never re-saved. */
+    if (loyalty.perAmountModel) {
+      const per = Number(loyalty.purchaseAmountForOnePoint || 0);
+      return per > 0 ? Math.floor(payableAfterPoints / per) : 0;
+    }
     const pct = Number(loyalty.earningPercentage || 0);
-    if (pct <= 0 || payableAfterPoints <= 0) return 0;
+    if (pct <= 0) return 0;
     const min = Number(loyalty.minPurchaseAmount || 0);
     if (min > 0 && payableAfterPoints < min) return 0;
     const cap = Number(loyalty.maxRewardPoint || 0);
@@ -1337,6 +1344,11 @@ export default function PosTill() {
                       {loyalty.name} - Balance: <b className="text-ink">{loyalty.balance} pts</b>
                       {Number(loyalty.balanceValue || 0) > 0 && ' (' + money(loyalty.balanceValue) + ')'}
                     </span>
+                    {Number(loyalty.todayLockedPoints || 0) > 0 && (
+                      <span className="text-warnyellow">
+                        {loyalty.todayLockedPoints} pts earned today - redeemable from tomorrow
+                      </span>
+                    )}
                     {earnPreview > 0 && (
                       <span className="text-okgreen">Earns {earnPreview} pts on this bill</span>
                     )}

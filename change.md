@@ -5,6 +5,9 @@
 ### NEW
 
 - lib/shareRoutes.js
+- models/IcItemInvoice.js
+- app/api/ic-item-invoice/route.js
+- app/admin/transaction/intercompanysell/sales-invoice/page.jsx
 
 ### EXISTING
 
@@ -19,6 +22,14 @@
 - components/ShareDocDialog.jsx
 - components/ListView.jsx
 - components/Icon.jsx
+- lib/barcodeLabel.js
+- lib/screenPermission.js
+- config/nav.js
+- components/MultiplePayDialog.jsx
+- app/admin/setting/loyaltypoint/fields.js
+- models/LoyaltyPoint.js
+- lib/loyalty.js
+- app/api/loyalty/route.js
 
 ## 29-09-2026
 

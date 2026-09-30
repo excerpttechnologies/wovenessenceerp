@@ -12,6 +12,13 @@ const LoyaltyPointSchema = new mongoose.Schema(
     active: { type: String, default: "Yes" },
     loyaltyPointName: { type: String, default: '' },
     pointsToInr: { type: Number, default: 0 },
+    /* THE EARNING MODEL since 30-09-2026: one point per every this-many
+       rupees of purchase (25 -> a 100 bill earns 4). 0 = earns nothing.
+       Replaces earningPercentage on the screen; that field stays below so a
+       config saved before the change keeps working until re-saved. */
+    purchaseAmountForOnePoint: { type: Number, default: 0 },
+    /* months - the master's "Points expire after" dropdown */
+    pointsExpireAfter: { type: Number, default: 0 },
     earningPercentage: { type: Number, default: 0 },
     minPurchaseAmount: { type: Number, default: 0 },
     maxRewardPoint: { type: Number, default: 0 },
