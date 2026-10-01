@@ -226,6 +226,39 @@ export async function GET(req) {
     }
     filter.supplierId = { $in: [...keys] };
   }
+
+  /* CITY narrows to the vendors based there: barcodeLabel carries no city of
+     its own, so the suppliers whose billing or shipping city matches are
+     resolved first and the row must carry one of their keys - both
+     spellings, id and code, for the same two-keyed reason as the supplier
+     filter above. Joined through `ands` so it stacks with a supplier pick
+     rather than overwriting it, and a city that reaches no vendor matches
+     nothing rather than dropping the filter. */
+  const cityQ = s(sp.get('city'));
+  if (cityQ) {
+    const cityRx = { $regex: '^\\s*' + escapeRegex(cityQ) + '\\s*$', $options: 'i' };
+    const cityVendors = await Supplier.find({
+      $or: [{ billingCity: cityRx }, { shippingCity: cityRx }],
+    }).select('contactId').lean();
+    const cityKeys = [...new Set(
+      cityVendors.flatMap((v) => [String(v._id), s(v.contactId)]).filter(Boolean)
+    )];
+    ands.push({ supplierId: { $in: cityKeys } });
+  }
+
+  /* AGENT: the agent on the Supplier master (contactSchema agentId), so the
+     answer is the stock of every vendor that agent covers. Several agents
+     may be picked at once; an agent with no vendors matches nothing. */
+  const agentPicks = many('agentId').filter((v) => isValidObjectId(v));
+  if (agentPicks.length) {
+    const agentVendors = await Supplier.find({
+      agentId: { $in: agentPicks.map((v) => new Types.ObjectId(v)) },
+    }).select('contactId').lean();
+    const agentKeys = [...new Set(
+      agentVendors.flatMap((v) => [String(v._id), s(v.contactId)]).filter(Boolean)
+    )];
+    ands.push({ supplierId: { $in: agentKeys } });
+  }
   const startDate = s(sp.get('startDate'));
   const endDate = s(sp.get('endDate'));
   if (startDate || endDate) {

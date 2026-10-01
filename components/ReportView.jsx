@@ -1729,15 +1729,24 @@ const cellOf = (row, col) => {
 
 /* A ref filter needs its own option list, so it is its own component -
    useOptions is a hook and cannot run inside a map. */
-function RefFilter({ f, value, onChange }) {
-  const { options, loading } = useOptions(f.ref);
+function RefFilter({ f, value, onChange, depValue }) {
+  /* dependsOn: the list is NARROWED BY ANOTHER FILTER's value - the Master
+     Stock Report's supplier picker offers only the chosen city's vendors -
+     and the control stays disabled until that value exists, its placeholder
+     saying which box to fill first. */
+  const waiting = Boolean(f.dependsOn) && !String(depValue || '').trim();
+  const params = f.dependsOn && !waiting
+    ? { [f.dependsParam || f.dependsOn]: String(depValue).trim() }
+    : null;
+  const { options, loading } = useOptions(f.ref, '', !waiting, params);
   return (
     <MultiSelect
       mode={f.multi ? 'multi' : 'single'}
-      options={options}
+      options={waiting ? [] : options}
       loading={loading}
+      disabled={waiting}
       value={f.multi ? (value || []) : (value || '')}
-      placeholder={f.all || 'Select...'}
+      placeholder={waiting ? (f.waitPlaceholder || 'Select...') : (f.all || 'Select...')}
       onChange={onChange}
     />
   );
@@ -1858,9 +1867,63 @@ function TagsFilter({ f, value, onChange, business }) {
   );
 }
 
-function Filter({ f, value, onChange, business }) {
+/* A city, typed with suggestions - the box another filter can depend on.
+   Suggestions come from f.suggest (the Master Stock Report asks
+   /api/reports/supplier-cities: only cities its suppliers are in), else the
+   all-India list at /api/cities. Debounced, and a reply for a term already
+   typed past is dropped. The free text itself is the value; picking a
+   suggestion just completes the spelling. The suggestion buttons
+   preventDefault on mousedown so the click lands before blur closes the
+   list - the TagsFilter pattern. */
+function CityFilter({ f, value, onChange, business }) {
+  const [open, setOpen] = useState(false);
+  const term = String(value || '').trim();
+  const [cities, setCities] = useState([]);
+  useEffect(() => {
+    let off = false;
+    const timer = setTimeout(() => {
+      const qs = new URLSearchParams({ q: term, business: business || '' });
+      fetch((f.suggest || '/api/cities') + '?' + qs, { cache: 'no-store' })
+        .then((r) => r.json())
+        .then((d) => { if (!off) setCities(d.options || []); })
+        .catch(() => { if (!off) setCities([]); });
+    }, 200);
+    return () => { off = true; clearTimeout(timer); };
+  }, [f.suggest, term, business]);
+  const picks = cities.filter((c) => String(c.value).toLowerCase() !== term.toLowerCase());
+  return (
+    <div className="relative">
+      <input
+        className="f-input"
+        placeholder={f.placeholder || 'Type city'}
+        value={value || ''}
+        onChange={(e) => { onChange(e.target.value); setOpen(true); }}
+        onFocus={() => setOpen(true)}
+        onBlur={() => setOpen(false)}
+      />
+      {open && picks.length > 0 && (
+        <div className="absolute left-0 right-0 top-full z-30 mt-1 max-h-56 overflow-auto rounded border border-line bg-white shadow-lg">
+          {picks.map((c) => (
+            <button
+              key={c.value}
+              type="button"
+              className="block w-full border-b border-line px-2 py-1.5 text-left text-[12.5px] last:border-b-0 hover:bg-[#f4f7fb]"
+              onMouseDown={(e) => e.preventDefault()}
+              onClick={() => { onChange(c.value); setOpen(false); }}
+            >
+              {c.label}
+            </button>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function Filter({ f, value, onChange, business, depValue }) {
   if (f.type === 'tags') return <TagsFilter f={f} value={value} onChange={onChange} business={business} />;
-  if (f.type === 'ref') return <RefFilter f={f} value={value} onChange={onChange} />;
+  if (f.type === 'city') return <CityFilter f={f} value={value} onChange={onChange} business={business} />;
+  if (f.type === 'ref') return <RefFilter f={f} value={value} onChange={onChange} depValue={depValue} />;
 
   if (f.type === 'select') {
     return (
@@ -2072,6 +2135,94 @@ function GrandTotal({ columns, totals }) {
   );
 }
 
+/* ---- grouped filter layout (filterLayout: 'groups') ----------------------
+
+   The filter card as the Master Stock Report mock draws it: the date range
+   on its own line top right, then one bordered section per entry of
+   spec.filterGroups - coloured left edge, icon, a fold button - each
+   holding labelled inputs. A field entry is a filter KEY, or
+   { label, range: [minKey, maxKey] }, which renders one label over a
+   Start / End pair so eleven Min/Max keys read as the six ranges they are. */
+const GROUP_COLS = {
+  3: 'md:grid-cols-2 xl:grid-cols-3',
+  4: 'md:grid-cols-2 xl:grid-cols-4',
+  5: 'md:grid-cols-3 xl:grid-cols-5',
+};
+const GROUP_LABEL = 'mb-1 block text-[11.5px] font-semibold uppercase tracking-wide text-[#5d6b83]';
+
+function FilterGroups({ spec, draft, set, business }) {
+  const [folded, setFolded] = useState({});
+  const byKey = new Map((spec.filters || []).map((f) => [f.k, f]));
+  const [fromK, toK] = spec.headerDates || [];
+
+  return (
+    <>
+      {fromK && (
+        <div className="mb-4 flex flex-wrap items-center justify-end gap-x-5 gap-y-2">
+          {[[fromK, 'From Date'], [toK, 'To Date']].filter(([k]) => k).map(([k, lab]) => (
+            <label key={k} className="flex items-center gap-2 text-[11.5px] font-semibold uppercase tracking-wide text-[#5d6b83]">
+              {lab}
+              <input type="date" className="f-input !w-[170px]" value={draft[k] || ''} onChange={(e) => set(k, e.target.value)} />
+            </label>
+          ))}
+        </div>
+      )}
+
+      {(spec.filterGroups || []).map((g) => {
+        const shut = Boolean(folded[g.title]);
+        return (
+          /* no overflow-hidden here: it clipped the dropdowns (barcode
+             suggestions, item / supplier pickers) at the section's edge.
+             The header rounds its own top corners instead. */
+          <div key={g.title} className="relative mb-3 rounded-md border border-line" style={{ borderLeft: '4px solid ' + g.color }}>
+            <div className="flex items-center gap-2.5 rounded-tr-md px-4 py-2.5" style={{ backgroundColor: g.color + '0d' }}>
+              <span className="flex h-7 w-7 items-center justify-center rounded" style={{ backgroundColor: g.color + '22', color: g.color }}>
+                <Icon name={g.icon || 'filter'} size={14} />
+              </span>
+              <span className="text-[13px] font-bold uppercase tracking-wide text-ink">{g.title}</span>
+              <span className="flex-1" />
+              <button
+                type="button"
+                aria-label={(shut ? 'Expand ' : 'Collapse ') + g.title}
+                className="flex h-6 w-6 items-center justify-center rounded border border-line bg-white text-inkmuted hover:text-ink"
+                onClick={() => setFolded((o) => ({ ...o, [g.title]: !shut }))}
+              >
+                <Icon name={shut ? 'plus' : 'minus'} size={12} />
+              </button>
+            </div>
+            {!shut && (
+              <div className={'grid grid-cols-1 gap-x-5 gap-y-3 px-4 pb-4 pt-3 ' + (GROUP_COLS[g.cols] || GROUP_COLS[4])}>
+                {(g.fields || []).map((entry) => {
+                  if (typeof entry === 'string' || !entry.range) {
+                    const f = byKey.get(typeof entry === 'string' ? entry : entry.k);
+                    if (!f) return null;
+                    return (
+                      <div key={f.k}>
+                        <label className={GROUP_LABEL}>{f.label}{(f.req || f.oneOf) && <span className="f-req">*</span>}</label>
+                        <Filter f={f} value={draft[f.k]} onChange={(v) => set(f.k, v)} business={business} depValue={f.dependsOn ? draft[f.dependsOn] : undefined} />
+                      </div>
+                    );
+                  }
+                  const [lo, hi] = entry.range;
+                  return (
+                    <div key={lo}>
+                      <label className={GROUP_LABEL}>{entry.label}</label>
+                      <div className="flex gap-2">
+                        <input type="text" className="f-input" placeholder="Start" value={draft[lo] || ''} onChange={(e) => set(lo, e.target.value)} />
+                        <input type="text" className="f-input" placeholder="End" value={draft[hi] || ''} onChange={(e) => set(hi, e.target.value)} />
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+          </div>
+        );
+      })}
+    </>
+  );
+}
+
 /* What a report's API is asked: the page, the scope from the top bar, the tab
    and the filters as last searched. One builder for the screen and for its
    exports, so an export asks exactly what the screen shows. */
@@ -2115,7 +2266,15 @@ export default function ReportView({ spec, toolbar = null }) {
      report fetches its whole result first */
   const [exporting, setExporting] = useState('');
 
-  const set = (k, v) => setDraft((d) => ({ ...d, [k]: v }));
+  /* Setting a filter clears every filter that depends on it: the suppliers
+     picked for one city are not a valid pick for another. */
+  const set = (k, v) => setDraft((d) => {
+    const next = { ...d, [k]: v };
+    (spec.filters || []).forEach((f) => {
+      if (f.dependsOn === k) next[f.k] = Array.isArray(d[f.k]) ? [] : '';
+    });
+    return next;
+  });
 
   const required = (spec.filters || []).filter((f) => f.req);
 
@@ -2323,17 +2482,21 @@ export default function ReportView({ spec, toolbar = null }) {
 
       {/* ------------------------------------------------------- filters --- */}
       <div className="card">
-        <div className="card-head">
-          <span className="card-title">
-            <Icon name="filter" size={15} />
-            {spec.filterTitle || (spec.subtitle ? 'Report Filters' : 'Filters')}
-          </span>
-        </div>
+        {spec.filterLayout !== 'groups' && (
+          <div className="card-head">
+            <span className="card-title">
+              <Icon name="filter" size={15} />
+              {spec.filterTitle || (spec.subtitle ? 'Report Filters' : 'Filters')}
+            </span>
+          </div>
+        )}
         <div className="card-body">
           {error && <div className="flash flash-err">{error}</div>}
           {!business && <div className="flash flash-err">Select a business in the top bar.</div>}
 
-          {spec.filterLayout === 'rows' ? (
+          {spec.filterLayout === 'groups' ? (
+            <FilterGroups spec={spec} draft={draft} set={set} business={business} />
+          ) : spec.filterLayout === 'rows' ? (
             /* EVERY FILTER ON SCREEN, name on the left and its input on the
                right. A report opts into this with filterLayout: 'rows' when its
                filters are the point of the screen; the default stays the
@@ -2349,7 +2512,7 @@ export default function ReportView({ spec, toolbar = null }) {
                     {f.label}{(f.req || f.oneOf) && <span className="f-req">*</span>}
                   </label>
                   <div className="min-w-0 flex-1">
-                    <Filter f={f} value={draft[f.k]} onChange={(v) => set(f.k, v)} business={business} />
+                    <Filter f={f} value={draft[f.k]} onChange={(v) => set(f.k, v)} business={business} depValue={f.dependsOn ? draft[f.dependsOn] : undefined} />
                   </div>
                 </div>
               ))}
@@ -2373,7 +2536,7 @@ export default function ReportView({ spec, toolbar = null }) {
                       </button>
                     )}
                   </div>
-                  <Filter f={f} value={draft[f.k]} onChange={(v) => set(f.k, v)} business={business} />
+                  <Filter f={f} value={draft[f.k]} onChange={(v) => set(f.k, v)} business={business} depValue={f.dependsOn ? draft[f.dependsOn] : undefined} />
                 </div>
               ))}
               <AddFilterMenu filters={spec.filters || []} visible={visible} onAdd={addFilter} />

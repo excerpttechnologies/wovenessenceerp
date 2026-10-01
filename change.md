@@ -7,6 +7,7 @@
 - app/admin/transaction/intercompanysell/consignment/page.jsx
 - app/admin/transaction/intercompanysell/sales-invoice/print/[id]/page.jsx
 - app/api/ic-item-invoice/[id]/print/route.js
+- app/api/reports/supplier-cities/route.js
 
 ### EXISTING
 
@@ -23,6 +24,11 @@
 - components/ListView.jsx
 - components/PosInvoiceView.jsx
 - components/IcChallanForm.jsx
+- app/admin/report/master-stock-report/fields.js
+- app/api/reports/master-stock-report/route.js
+- app/api/options/route.js
+- components/ReportView.jsx
+- components/useOptions.js
 
 ## 30-09-2026
 

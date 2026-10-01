@@ -1283,7 +1283,11 @@ const REFS = {
      which mixed every company's vendors into one list and then truncated
      that list at 200 - so a company with 819 suppliers could not reach most
      of its own, and could pick another company's. */
-  supplier:                  { load: () => import('@/models/Contact'), kind: 'Supplier', label: 'businessName', nameFallback: ['firstName', 'lastName'], codeField: 'contactId' },
+  /* cityFields: the picker can be narrowed to one city (&city=...) - the
+     Master Stock Report chooses the city first, then picks among only that
+     city's vendors. Billing OR shipping city, since either may be the one
+     the operator knows the vendor by. */
+  supplier:                  { load: () => import('@/models/Contact'), kind: 'Supplier', label: 'businessName', nameFallback: ['firstName', 'lastName'], codeField: 'contactId', cityFields: ['billingCity', 'shippingCity'] },
   agent:                     { load: () => import('@/models/Contact'), kind: 'Agent', label: 'businessName', nameFallback: ['firstName', 'lastName'], codeField: 'contactId' },
   customer:                  { load: () => import('@/models/Contact'), kind: 'Customer', label: 'businessName', nameFallback: ['firstName', 'lastName'], codeField: 'contactId' },
  
@@ -1367,6 +1371,16 @@ export async function GET(req) {
     const l = sp.get('location');
     if (l && isValidObjectId(l)) {
       filter.$and = [...(filter.$and || []), { $or: [{ locationId: l }, { locationId: null }] }];
+    }
+  }
+  /* a picker narrowed to one CITY - see cityFields on the supplier ref.
+     Case-insensitive and tolerant of stray spaces, because the city on a
+     contact was typed by hand. */
+  if (entry.cityFields) {
+    const city = (sp.get('city') || '').trim();
+    if (city) {
+      const rx = { $regex: '^\\s*' + escapeRegex(city) + '\\s*$', $options: 'i' };
+      (filter.$and ||= []).push({ $or: entry.cityFields.map((f) => ({ [f]: rx })) });
     }
   }
   if (entry.kind) filter.contactKind = entry.kind;

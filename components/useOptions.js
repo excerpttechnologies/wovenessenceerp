@@ -28,8 +28,13 @@ export function refreshOptions(ref) {
   listeners.forEach((fn) => fn());
 }
 
-export function useOptions(ref, query = '', enabled = true) {
+export function useOptions(ref, query = '', enabled = true, params = null) {
   const { business, location } = useScope();
+  /* Extra query params a caller needs on the options request - the Master
+     Stock Report's supplier picker sends the chosen city. Carried through
+     the effect as a STRING so it reruns when a value changes, not on the
+     fresh object a caller builds every render. */
+  const extra = params ? JSON.stringify(params) : '';
   const [options, setOptions] = useState([]);
   const [loading, setLoading] = useState(false);
   /* An empty list and a FAILED request are different things, and the picker
@@ -57,6 +62,11 @@ export function useOptions(ref, query = '', enabled = true) {
     setError('');
 
     const qs = new URLSearchParams({ ref, business: business || '', location: location || '', q: query });
+    if (extra) {
+      Object.entries(JSON.parse(extra)).forEach(([k, v]) => {
+        if (v !== undefined && v !== null && String(v) !== '') qs.set(k, String(v));
+      });
+    }
     fetch('/api/options?' + qs, { cache: 'no-store' })
       .then(async (r) => {
         const d = await r.json().catch(() => ({}));
@@ -73,7 +83,7 @@ export function useOptions(ref, query = '', enabled = true) {
 
     /* a scope change mid-flight must not let the old list land last */
     return () => { off = true; };
-  }, [ref, business, location, query, version, enabled]);
+  }, [ref, business, location, query, version, enabled, extra]);
 
   return { options, loading, error };
 }
