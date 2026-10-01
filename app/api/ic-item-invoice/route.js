@@ -170,18 +170,23 @@ export async function GET(req) {
       .limit(100)
       .lean();
 
-    const rows = invoices.flatMap((inv) => (inv.items || []).map((l) => ({
+    const rows = invoices.map((inv) => ({
       invoiceId: String(inv._id),
       invoiceNo: inv.invoiceNo || '',
       invoiceDate: inv.invoiceDate || inv.createdAt,
       toBusinessName: inv.toBusinessName || '',
-      dcNo: l.dcNo || '',
-      barcodeNo: l.barcodeNo || '',
-      itemName: l.itemName || l.itemCode || '',
-      qty: num(l.qty),
-      netAmount: num(l.netAmount),
-      posInvoiceNo: l.posInvoiceNo || '',
-    })));
+      finYear: inv.finYear || '',
+      dcNos: [...new Set((inv.items || []).map((l) => l.dcNo).filter(Boolean))],
+      itemCount: (inv.items || []).length,
+      totalQty: num(inv.totalQty),
+      taxableValue: num(inv.taxableValue),
+      igstTotal: num(inv.igstTotal),
+      cgstTotal: num(inv.cgstTotal),
+      sgstTotal: num(inv.sgstTotal),
+      roundOff: num(inv.roundOff),
+      netValue: num(inv.netValue),
+      items: inv.items || [],
+    }));
 
     return json({ rows });
   }

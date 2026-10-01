@@ -162,7 +162,16 @@ export default function ReceiveDeliveryChallanPage() {
   const other = (row) => (weSent(row)
     ? { businessId: row.toBusinessId, locationId: row.toLocationId, way: 'coming back to us' }
     : { businessId: row.businessId, locationId: row.locationId, way: 'we returned' });
-  const leftToReturn = (line) => (Number(line.qty) || 0) - (Number(line.returnedQty) || 0);
+  /* what may still be REQUESTED: the physical remainder, less what is
+     already sitting in a pending request awaiting the sender (the two-step
+     return, 01-10-2026) */
+  const pendingOf = (row, line) => (row.returnRequests || [])
+    .filter((r) => r.status === 'pending')
+    .reduce((a, r) => a + (r.lines || [])
+      .filter((l) => String(l.barcodeNo || '').trim().toLowerCase() === String(line.barcodeNo || '').trim().toLowerCase())
+      .reduce((n, l) => n + (Number(l.qty) || 0), 0), 0);
+  const leftToReturn = (row, line) =>
+    (Number(line.qty) || 0) - (Number(line.returnedQty) || 0) - pendingOf(row, line);
 
   /* Send back only the lines with a quantity typed against them. */
   async function sendReturn(row) {
@@ -189,7 +198,7 @@ export default function ReceiveDeliveryChallanPage() {
         return;
       }
       const total = lines.reduce((a, l) => a + l.qty, 0);
-      setFlash({ type: 'ok', msg: 'Returned ' + total + ' from challan ' + (row.dcNo || '') + '.' });
+      setFlash({ type: 'ok', msg: 'Return request for ' + total + ' sent to the sender for approval - challan ' + (row.dcNo || '') + '.' });
       setReturnQty({});
       load();
     } catch {
@@ -322,18 +331,11 @@ export default function ReceiveDeliveryChallanPage() {
         </div>
       )}
 
-      <div className="mb-3 flex gap-2">
-        {[['received', 'Received'], ['returns', 'Returns']].map(([key, text]) => (
-          <button
-            key={key}
-            type="button"
-            className={'btn h-8 px-3 text-[12px] ' + (tab === key ? 'btn-primary' : '')}
-            onClick={() => { setTab(key); setDetailRow(null); setFlash(null); }}
-          >
-            {text}
-          </button>
-        ))}
-      </div>
+      {/* The Returns tab that sat here moved to its own page - Inter
+          Company Sell > Consignment (user, 01-10-2026). `tab` stays, fixed
+          on 'received', so the branches below need no rework; returning
+          damaged goods is still done HERE, inside a received challan's
+          popup. */}
 
       {/* WAITING FOR APPROVAL - its own section, above the list, so work to
           do is never mixed in with work already done. Only on the Received
@@ -406,7 +408,7 @@ export default function ReceiveDeliveryChallanPage() {
               <tr><td colSpan={9} className="dt-empty">No items on this challan.</td></tr>
             )}
             {(detailRow.items || []).map((line, n) => {
-              const left = leftToReturn(line);
+              const left = leftToReturn(detailRow, line);
               return (
                 <tr key={n}>
                   <td className="text-center">{n + 1}</td>
@@ -449,7 +451,9 @@ export default function ReceiveDeliveryChallanPage() {
                             setReturnQty((cur) => ({ ...cur, [qtyKey(detailRow, line)]: capped }));
                           }}
                         />
-                      ) : <span className="text-inkmuted">all returned</span>}
+                      ) : (Number(line.qty) || 0) - (Number(line.returnedQty) || 0) > 0
+                        ? <span className="text-warnyellow">awaiting approval</span>
+                        : <span className="text-inkmuted">all returned</span>}
                     </td>
                   )}
                 </tr>
@@ -459,7 +463,7 @@ export default function ReceiveDeliveryChallanPage() {
         </table>
 
         {tab === 'received' && detailRow.receivedAt
-          && (detailRow.items || []).some((l) => leftToReturn(l) > 0) && (
+          && (detailRow.items || []).some((l) => leftToReturn(detailRow, l) > 0) && (
           <div className="mt-2 flex items-center gap-3">
             <button
               type="button"
@@ -469,10 +473,10 @@ export default function ReceiveDeliveryChallanPage() {
             >
               {busy === detailRow._id
                 ? <span className="spin" />
-                : <Icon name="undo" size={12} />} Return Damaged
+                : <Icon name="undo" size={12} />} Request Return
             </button>
             <span className="text-[12px] text-inkmuted">
-              Enter the damaged quantity against each line - the rest stays here.
+              Enter the damaged quantity against each line - the request goes to the sender for approval before anything moves.
             </span>
           </div>
         )}
@@ -485,6 +489,25 @@ export default function ReceiveDeliveryChallanPage() {
               <div key={k} className="text-[12px] text-inkmuted">
                 {day(ev.at)}{ev.by ? ' - ' + ev.by : ''}:{' '}
                 {(ev.lines || []).map((l) => l.barcodeNo + ' x ' + l.qty).join(', ')}
+              </div>
+            ))}
+          </div>
+        )}
+
+        {/* the requests and where each one stands */}
+        {!!(detailRow.returnRequests || []).length && (
+          <div className="mt-3 border-t border-line pt-2">
+            <div className="mb-1 text-[12px] font-semibold">Return Requests</div>
+            {[...(detailRow.returnRequests || [])].reverse().map((r, k) => (
+              <div key={k} className="text-[12px] text-inkmuted">
+                {day(r.at)}{r.by ? ' - ' + r.by : ''}:{' '}
+                {(r.lines || []).map((l) => l.barcodeNo + ' x ' + l.qty).join(', ')}
+                {' - '}
+                <span className={
+                  r.status === 'pending' ? 'font-semibold text-warnyellow'
+                    : r.status === 'approved' ? 'font-semibold text-okgreen'
+                      : 'font-semibold text-danger'
+                }>{r.status}</span>
               </div>
             ))}
           </div>

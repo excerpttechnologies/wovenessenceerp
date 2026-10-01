@@ -5,6 +5,7 @@ import Icon from './Icon';
 import {
   qtyByUom, hsnSummary, invoiceTotals, money,
 } from '@/app/admin/transaction/intercompanysell/salesinvoice/fields';
+import { amountInWords } from '@/lib/amountWords';
 
 /* ==========================================================================
    Printable Tax Invoice (e-invoice layout).
@@ -40,20 +41,31 @@ const inr = (v) => Number(money(v)).toLocaleString('en-IN', {
   minimumFractionDigits: 2, maximumFractionDigits: 2,
 });
 
-export default function IcTaxInvoiceView({ id }) {
+/* `endpoint` lets the consignment Sales Invoice print through this same
+   layout - it defaults to the older IC invoice's route, so the existing
+   screens change nothing. `backHref` is where Back returns to. */
+export default function IcTaxInvoiceView({
+  id,
+  endpoint = '',
+  backHref = '/admin/transaction/intercompanysell/salesinvoice',
+  /* true prints the same document under the e-Invoice heading - the IRN /
+     Ack / QR block renders whenever those fields are populated, in either
+     mode */
+  einvoice = false,
+}) {
   const router = useRouter();
   const [data, setData] = useState(null);
   const [error, setError] = useState('');
 
   useEffect(() => {
-    fetch('/api/ic-sales-invoice/' + id + '/print')
+    fetch(endpoint || '/api/ic-sales-invoice/' + id + '/print')
       .then(async (r) => {
         if (!r.ok) throw new Error((await r.json()).error || 'Could not load');
         return r.json();
       })
       .then(setData)
       .catch((e) => setError(e.message));
-  }, [id]);
+  }, [id, endpoint]);
 
   if (error) return <div className="card"><div className="card-body text-danger">{error}</div></div>;
   if (!data) return <div className="card"><div className="card-body"><span className="spin" /></div></div>;
@@ -72,7 +84,7 @@ export default function IcTaxInvoiceView({ id }) {
   return (
     <>
       <div className="no-print mb-3 flex items-center">
-        <span className="text-[15px] font-bold text-brand-link">Print E-Invoice</span>
+        <span className="text-[15px] font-bold text-brand-link">{einvoice ? 'Print E-Invoice' : 'Print Tax Invoice'}</span>
         <span className="flex-1" />
         <button type="button" className="btn btn-primary" onClick={() => window.print()}>
           <Icon name="printer" size={14} /> Print
@@ -80,14 +92,14 @@ export default function IcTaxInvoiceView({ id }) {
         <button
           type="button"
           className="btn ml-2"
-          onClick={() => router.push('/admin/transaction/intercompanysell/salesinvoice')}
+          onClick={() => router.push(backHref)}
         >
           <Icon name="back" size={14} /> Back
         </button>
       </div>
 
       <div className="print-doc mx-auto max-w-[980px] bg-white text-[13px]">
-        <div className="mb-1 text-center text-[15px] font-bold">Tax Invoice</div>
+        <div className="mb-1 text-center text-[15px] font-bold">{einvoice ? 'e-Invoice' : 'Tax Invoice'}</div>
 
         <div className="border border-black">
           {/* ------------------------------------------------ letterhead */}
@@ -278,6 +290,11 @@ export default function IcTaxInvoiceView({ id }) {
             </tr>
           </tbody>
         </table>
+
+        {/* the figure spelled out, as the signed copy reads it */}
+        <div className="mt-2 text-[13px]">
+          <b>Amt In words :</b> {amountInWords(totals.netValue)}
+        </div>
       </div>
     </>
   );

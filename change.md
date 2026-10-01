@@ -2,8 +2,21 @@
 
 ## 01-10-2026
 
+### NEW
+
+- app/admin/transaction/intercompanysell/consignment/page.jsx
+- app/admin/transaction/intercompanysell/sales-invoice/print/[id]/page.jsx
+- app/api/ic-item-invoice/[id]/print/route.js
+
 ### EXISTING
 
+- app/admin/transaction/intercompanysell/receivedeliverychallan/page.jsx
+- config/nav.js
+- app/api/ic-receive-delivery-challan/route.js
+- models/IcDeliveryChallan.js
+- app/api/ic-item-invoice/route.js
+- app/admin/transaction/intercompanysell/sales-invoice/page.jsx
+- components/IcTaxInvoiceView.jsx
 - app/admin/transaction/sell/pos/page.jsx
 - app/api/sell-pos/route.js
 - components/FilterPanel.jsx

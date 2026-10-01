@@ -28,6 +28,8 @@ import { useScope } from '@/components/ScopeContext';
    whether sold or not. This bills sold items only. */
 
 const money = (v) => String(Math.trunc(Number(v || 0)));
+/* the popup's figures keep the paise - an invoice is an exact document */
+const money2 = (v) => Number(v || 0).toFixed(2);
 const qtyText = (v) => String(Math.round((Number(v) || 0) * 100) / 100);
 const when = (v) => (v ? new Date(v).toLocaleString('en-IN', { dateStyle: 'medium', timeStyle: 'short' }) : '-');
 const day = (v) => (v ? new Date(v).toLocaleDateString('en-GB') : '-');
@@ -39,6 +41,8 @@ export default function IcItemSalesInvoicePage() {
   const [loading, setLoading] = useState(false);
   const [flash, setFlash] = useState(null);
   const [picked, setPicked] = useState([]);
+  /* the billed invoice open in the View popup */
+  const [viewInv, setViewInv] = useState(null);
   const [saving, setSaving] = useState(false);
 
   const load = useCallback(async () => {
@@ -219,7 +223,7 @@ export default function IcItemSalesInvoicePage() {
           disabled={!picked.length || saving}
           onClick={saveBilled}
         >
-          {saving ? <span className="spin" /> : <Icon name="save" size={14} />} Save Billed
+          {saving ? <span className="spin" /> : <Icon name="save" size={14} />} Save 
         </button>
         <span className="text-[13px] text-inkmuted">
           {picked.length
@@ -240,36 +244,144 @@ export default function IcItemSalesInvoicePage() {
             <tr>
               <th style={{ width: 130 }}>Invoice No</th>
               <th style={{ width: 95 }}>Date</th>
-              <th style={{ width: 170 }}>Receiver</th>
-              <th style={{ width: 150 }}>DC No</th>
-              <th style={{ width: 110 }}>Barcode</th>
-              <th>Item</th>
+              <th style={{ width: 200 }}>Receiver</th>
+              <th>DC No(s)</th>
+              <th className="!text-right" style={{ width: 60 }}>Items</th>
               <th className="!text-right" style={{ width: 60 }}>Qty</th>
               <th className="!text-right" style={{ width: 90 }}>Amount</th>
-              <th style={{ width: 110 }}>POS Invoice</th>
+              <th style={{ width: 70 }}>Action</th>
             </tr>
           </thead>
           <tbody>
-            {loading && <tr><td colSpan={9} className="dt-empty">Loading...</td></tr>}
+            {loading && <tr><td colSpan={8} className="dt-empty">Loading...</td></tr>}
             {!loading && !billed.length && (
-              <tr><td colSpan={9} className="dt-empty">Nothing billed yet.</td></tr>
+              <tr><td colSpan={8} className="dt-empty">Nothing billed yet.</td></tr>
             )}
-            {!loading && billed.map((r, i) => (
-              <tr key={r.invoiceId + '-' + i}>
-                <td className="font-semibold">{r.invoiceNo || '-'}</td>
-                <td>{day(r.invoiceDate)}</td>
-                <td>{r.toBusinessName || '-'}</td>
-                <td>{r.dcNo || '-'}</td>
-                <td className="font-mono text-[12px]">{r.barcodeNo || '-'}</td>
-                <td>{r.itemName || '-'}</td>
-                <td className="!text-right">{qtyText(r.qty)}</td>
-                <td className="!text-right">{money(r.netAmount)}</td>
-                <td>{r.posInvoiceNo || '-'}</td>
+            {!loading && billed.map((inv) => (
+              <tr key={inv.invoiceId}>
+                <td className="font-semibold">{inv.invoiceNo || '-'}</td>
+                <td>{day(inv.invoiceDate)}</td>
+                <td>{inv.toBusinessName || '-'}</td>
+                <td className="text-[12px]">{(inv.dcNos || []).join(', ') || '-'}</td>
+                <td className="!text-right">{inv.itemCount}</td>
+                <td className="!text-right">{qtyText(inv.totalQty)}</td>
+                <td className="!text-right">{money(inv.netValue)}</td>
+                <td>
+                  <span className="inline-flex items-center gap-1.5">
+                    <button type="button" className="act-btn bg-[#2b7fd4]" title="View" onClick={() => setViewInv(inv)}>
+                      <Icon name="eye" size={12} />
+                    </button>
+                    {/* the Tax Invoice, in its own tab, ready to print */}
+                    <button type="button" className="act-btn bg-[#4b5563]" title="Print" onClick={() => window.open('/admin/transaction/intercompanysell/sales-invoice/print/' + inv.invoiceId, '_blank')}>
+                      <Icon name="printer" size={12} />
+                    </button>
+                    {/* the same document under the e-Invoice heading */}
+                    <button type="button" className="act-btn bg-okgreen" title="Print E-Invoice" onClick={() => window.open('/admin/transaction/intercompanysell/sales-invoice/print/' + inv.invoiceId + '?einv=1', '_blank')}>
+                      <Icon name="file" size={12} />
+                    </button>
+                  </span>
+                </td>
               </tr>
             ))}
           </tbody>
         </table>
       </div>
+
+      {/* ------------------------------------- View Sales Invoice popup -- */}
+      {viewInv && (
+        <div
+          className="fixed inset-0 z-50 flex items-start justify-center overflow-y-auto bg-black/40 p-4"
+          onMouseDown={() => setViewInv(null)}
+        >
+          <div
+            className="my-6 w-full max-w-6xl rounded-lg bg-white shadow-xl"
+            onMouseDown={(e) => e.stopPropagation()}
+          >
+            <div className="flex items-center gap-3 border-b border-line px-5 py-3">
+              <span className="card-title">View Sales Invoice</span>
+              <span className="flex-1" />
+              <button
+                type="button"
+                aria-label="Close"
+                className="flex h-7 w-7 items-center justify-center rounded-full bg-danger text-white"
+                onClick={() => setViewInv(null)}
+              >
+                <Icon name="x" size={14} />
+              </button>
+            </div>
+
+            <div className="p-5">
+              <div className="mb-3 grid gap-x-8 gap-y-1 text-[13px] md:grid-cols-2">
+                <div><b>Receiver</b> : {viewInv.toBusinessName || '-'}</div>
+                <div><b>SI Date</b> : {day(viewInv.invoiceDate)}</div>
+                <div><b>SI No</b> : {viewInv.invoiceNo || '-'}</div>
+                <div><b>Financial Year</b> : {viewInv.finYear || '-'}</div>
+                <div className="md:col-span-2"><b>Dc Codes</b> : {(viewInv.dcNos || []).join(', ') || '-'}</div>
+              </div>
+
+              <div className="overflow-x-auto">
+                <table className="dt">
+                  <thead>
+                    <tr>
+                      <th style={{ width: 44 }}>Sl No</th>
+                      <th>Dc Code</th>
+                      <th>Item Code</th>
+                      <th>Item Name</th>
+                      <th style={{ width: 90 }}>HSN</th>
+                      <th style={{ width: 80 }}>GST Slab</th>
+                      <th style={{ width: 60 }}>UOM</th>
+                      <th className="!text-right" style={{ width: 70 }}>Quantity</th>
+                      <th className="!text-right" style={{ width: 90 }}>Unit Rate</th>
+                      <th className="!text-right" style={{ width: 95 }}>Before GST</th>
+                      <th className="!text-right" style={{ width: 90 }}>IGST Amount</th>
+                      <th className="!text-right" style={{ width: 90 }}>CGST Amount</th>
+                      <th className="!text-right" style={{ width: 90 }}>SGST Amount</th>
+                      <th className="!text-right" style={{ width: 95 }}>Net Amount</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {(viewInv.items || []).map((l, n) => (
+                      <tr key={n}>
+                        <td className="text-center">{n + 1}</td>
+                        <td>{l.dcNo || '-'}</td>
+                        <td>{l.itemCode || l.barcodeNo || '-'}</td>
+                        <td>{l.itemName || '-'}</td>
+                        <td>{l.hsn || '-'}</td>
+                        <td>GST {Number(l.igstPct || 0) || (Number(l.cgstPct || 0) + Number(l.sgstPct || 0))}%</td>
+                        <td>{l.uom || '-'}</td>
+                        <td className="!text-right">{qtyText(l.qty)}</td>
+                        <td className="!text-right">{money2(l.unitRate)}</td>
+                        <td className="!text-right">{money2(l.beforeTax)}</td>
+                        <td className="!text-right">{money2(l.igstAmount)}</td>
+                        <td className="!text-right">{money2(l.cgstAmount)}</td>
+                        <td className="!text-right">{money2(l.sgstAmount)}</td>
+                        <td className="!text-right font-semibold">{money2(l.netAmount)}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                  <tfoot>
+                    <tr className="font-bold">
+                      <td colSpan={7}>Totals</td>
+                      <td className="!text-right">{qtyText(viewInv.totalQty)}</td>
+                      <td />
+                      <td className="!text-right">{money2(viewInv.taxableValue)}</td>
+                      <td className="!text-right">{money2(viewInv.igstTotal)}</td>
+                      <td className="!text-right">{money2(viewInv.cgstTotal)}</td>
+                      <td className="!text-right">{money2(viewInv.sgstTotal)}</td>
+                      <td className="!text-right">{money2(viewInv.taxableValue + viewInv.igstTotal + viewInv.cgstTotal + viewInv.sgstTotal)}</td>
+                    </tr>
+                  </tfoot>
+                </table>
+              </div>
+
+              <div className="mt-2 flex justify-end gap-8 text-[13px]">
+                <span><b>Round Off</b> : {money2(viewInv.roundOff)}</span>
+                <span className="text-[14px]"><b>Net Value</b> : <b>{money2(viewInv.netValue)}</b></span>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

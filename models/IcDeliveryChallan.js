@@ -72,6 +72,15 @@ const IcDeliveryChallanSchema = new mongoose.Schema(
        entry of its own. */
     returns: { type: mongoose.Schema.Types.Mixed, default: [] },
 
+    /* RETURN REQUESTS - the two-step return (user, 01-10-2026): the
+       receiver ASKS to send defective goods back, and nothing moves until
+       the sender APPROVES. One entry per request:
+       { rid, at, by, lines: [{ barcodeNo, itemName, qty }],
+         status: 'pending' | 'approved' | 'rejected', actedAt, actedBy }.
+       Approval runs the stock movement the one-step return used to run
+       directly; a rejected request moves nothing. */
+    returnRequests: { type: mongoose.Schema.Types.Mixed, default: [] },
+
     /* set when converted downstream; null = still available to invoice.
        Same pattern as GRC -> Purchase Invoice elsewhere in the app, so the
        "unconverted" filter reads the same way. */

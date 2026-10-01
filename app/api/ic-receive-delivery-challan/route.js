@@ -111,8 +111,12 @@ export async function GET(req) {
      came FROM, because a return travels back to whoever sent the challan. */
   const filter = view === 'returns'
     ? {
-      'returns.0': { $exists: true },
-      $or: [{ businessId: business }, { toBusinessId: business }],
+      /* anything with return history OR an open request - the Consignment
+         page shows requests awaiting approval alongside finished returns */
+      $and: [
+        { $or: [{ 'returns.0': { $exists: true } }, { 'returnRequests.0': { $exists: true } }] },
+        { $or: [{ businessId: business }, { toBusinessId: business }] },
+      ],
     }
     : { toBusinessId: business };
 
@@ -179,121 +183,48 @@ async function handlePost(req) {
   await dbConnect();
 
   const challan = await IcDeliveryChallan.findById(id)
-    .select('businessId locationId toBusinessId toLocationId finYear receivedAt dcNo items returns').lean();
+    .select('businessId locationId toBusinessId toLocationId finYear receivedAt dcNo items returns returnRequests')
+    .lean();
   if (!challan) return json({ error: 'Challan not found.' }, 404);
 
-  /* Only the addressee may receive it, and only once. Checked here and not
-     just in the screen, because the id arrives in the request body. */
   const business = String(body.business || '');
-  if (!isValidObjectId(business) || String(challan.toBusinessId) !== business) {
-    return json({ error: 'This challan is not addressed to the selected branch.' }, 403);
-  }
+  if (!isValidObjectId(business)) return json({ error: 'No business selected.' }, 400);
 
-  /* Covers both branches below - receiving and returning are the same
-     permission, because both act on a challan this branch did not raise. */
+  /* one permission covers the whole handshake - requesting, approving and
+     receiving are all updates to a challan this branch did not raise alone */
   const denied = await screenDenial({
     session, ...IC_RDC, action: PERM.UPDATE, businessId: business,
   });
   if (denied) return json({ error: denied.message, code: denied.code }, 403);
-  /* ---------------------------------------------------------- RETURN ----
 
-     Part of a received challan going back: the receiver keeps what is sound
-     and sends the damaged quantity back to whoever shipped it.
+  /* ------------------------------------------- the two-step return ----
 
-     Recorded on the CHALLAN, not in a collection of its own. A return only
-     ever means something relative to the challan it came from - which
-     barcode, out of how many, against which document - and splitting that
-     across two collections buys nothing while giving the two a chance to
-     disagree.
+     RETURNING IS A HANDSHAKE NOW (user, 01-10-2026). The receiver no
+     longer sends defective goods straight back: it RAISES A REQUEST naming
+     lines and quantities, and nothing moves until somebody at the SENDING
+     branch approves it - approval runs exactly the movement the old
+     one-step return ran directly. A rejected request moves nothing.
 
-     `returnedQty` on each line is the running total, so the remaining
-     returnable quantity is qty - returnedQty and a line cannot be returned
-     twice over. `returns[]` keeps each event, so the sender can see what came
-     back and when rather than just a final number. */
-  if (body.action === 'return') {
-    if (!challan.receivedAt) {
-      return json({ error: 'Receive the challan before returning anything from it.' }, 409);
-    }
-
-    const asked = Array.isArray(body.lines) ? body.lines : [];
-    const wanted = new Map();
-    asked.forEach((l) => {
-      const key = String(l.barcodeNo || '').trim().toLowerCase();
-      const qty = Number(l.qty) || 0;
-      if (key && qty > 0) wanted.set(key, (wanted.get(key) || 0) + qty);
-    });
-    if (!wanted.size) return json({ error: 'Enter a quantity to return.' }, 400);
-
-    const lines = Array.isArray(challan.items) ? challan.items : [];
-    const logged = [];
-    const nextItems = lines.map((line) => {
-      const key = String(line.barcodeNo || '').trim().toLowerCase();
-      const want = wanted.get(key);
-      if (!want) return line;
-
-      const already = Number(line.returnedQty) || 0;
-      const left = (Number(line.qty) || 0) - already;
-      if (want > left) {
-        throw Object.assign(new Error(
-          'Only ' + left + ' left to return on barcode ' + (line.barcodeNo || '') + '.'
-        ), { status: 422 });
-      }
-
-      wanted.delete(key);
-      logged.push({ barcodeNo: line.barcodeNo || '', itemName: line.itemName || '', qty: want });
-      return { ...line, returnedQty: already + want };
-    });
-
-    if (wanted.size) {
-      return json({ error: 'Barcode ' + [...wanted.keys()][0] + ' is not on this challan.' }, 422);
-    }
-
-    await IcDeliveryChallan.collection.updateOne(
-      { _id: new Types.ObjectId(id) },
-      {
-        $set: { items: nextItems },
-        $push: {
-          returns: {
-            at: new Date(),
-            by: session.name || session.email || '',
-            lines: logged,
-          },
-        },
-      }
-    );
-
-    /* The returned quantity goes back into the SENDING branch's stock - it
-       left there when the challan was raised. Done after the document is
-       written so a failure here cannot lose the record of the return. */
-    /* both ends move: the damaged goods leave this branch and rejoin the
-       sender's stock */
-    await withdrawReceivedStock({ challan, asked: logged });
-    await restoreReturnedStock({ challan, asked: logged, user: session });
-
-    await writeRegister({
-      businessId: challan.toBusinessId,
-      locationId: challan.toLocationId,
-      finYear: challan.finYear || '',
-      type: 'ISSUE',
-      reason: 'Inter Company Return - Damaged',
-      remarks: 'Returned on challan ' + (challan.dcNo || ''),
-      items: logged,
-      user: session,
-    });
-
-    return json({ ok: true, id, returned: logged });
-  }
+     Requests live on the challan, like returns[] - a request only means
+     anything against the challan it names. Writes go through the raw
+     driver for the same schema-cache reason receivedAt does. */
+  if (body.action === 'return') return requestReturn({ challan, body, business, session });
+  if (body.action === 'approve-return') return approveReturn({ challan, body, business, session });
+  if (body.action === 'reject-return') return rejectReturn({ challan, body, business, session });
 
   /* ------------------------------------------------------------ RECEIVE --
 
-     Receipt is now automatic: /api/ic-delivery-challan lands the goods at the
-     destination in the same request that ships them, so nothing normally
-     reaches this branch any more. It is kept because it is the retry path for
-     a despatch whose receipt failed, and the backfill script uses the same
-     helper - removing it would leave no way to complete a stranded challan.
+     Only the addressee may receive it, and only once. Checked here and not
+     just in the screen, because the id arrives in the request body.
 
-     One definition of what receiving does lives in lib/icReceive.js so this
-     and the send path cannot drift apart. */
+     Kept as the retry path for a despatch whose receipt failed; the
+     backfill script uses the same helper. One definition of what receiving
+     does lives in lib/icReceive.js so this and the send path cannot drift
+     apart. */
+  if (String(challan.toBusinessId) !== business) {
+    return json({ error: 'This challan is not addressed to the selected branch.' }, 403);
+  }
+
   const { received, already } = await receiveChallan({ challan, user: session });
 
   if (already) {
@@ -305,4 +236,191 @@ async function handlePost(req) {
   }
 
   return json({ ok: true, id });
+}
+
+/* quantity per barcode already sitting in PENDING requests, so the same
+   piece cannot be requested twice while the first ask waits */
+const pendingByKey = (challan) => {
+  const map = new Map();
+  (challan.returnRequests || [])
+    .filter((r) => r.status === 'pending')
+    .forEach((r) => (r.lines || []).forEach((l) => {
+      const key = String(l.barcodeNo || '').trim().toLowerCase();
+      if (key) map.set(key, (map.get(key) || 0) + (Number(l.qty) || 0));
+    }));
+  return map;
+};
+
+/* The RECEIVER asks. Validated like the old direct return, PLUS the open
+   requests: qty - returned - pending is what may still be asked for. */
+async function requestReturn({ challan, body, business, session }) {
+  if (String(challan.toBusinessId) !== business) {
+    return json({ error: 'Only the branch that received the challan can request a return.' }, 403);
+  }
+  if (!challan.receivedAt) {
+    return json({ error: 'Receive the challan before requesting a return from it.' }, 409);
+  }
+
+  const asked = Array.isArray(body.lines) ? body.lines : [];
+  const wanted = new Map();
+  asked.forEach((l) => {
+    const key = String(l.barcodeNo || '').trim().toLowerCase();
+    const qty = Number(l.qty) || 0;
+    if (key && qty > 0) wanted.set(key, (wanted.get(key) || 0) + qty);
+  });
+  if (!wanted.size) return json({ error: 'Enter a quantity to return.' }, 400);
+
+  const pending = pendingByKey(challan);
+  const logged = [];
+  for (const line of (Array.isArray(challan.items) ? challan.items : [])) {
+    const key = String(line.barcodeNo || '').trim().toLowerCase();
+    const want = wanted.get(key);
+    if (!want) continue;
+
+    const already = Number(line.returnedQty) || 0;
+    const held = pending.get(key) || 0;
+    const left = (Number(line.qty) || 0) - already - held;
+    if (want > left) {
+      throw Object.assign(new Error(
+        'Only ' + left + ' left to request on barcode ' + (line.barcodeNo || '')
+        + (held ? ' (' + held + ' already awaiting approval)' : '') + '.'
+      ), { status: 422 });
+    }
+    wanted.delete(key);
+    logged.push({ barcodeNo: line.barcodeNo || '', itemName: line.itemName || '', qty: want });
+  }
+  if (wanted.size) {
+    return json({ error: 'Barcode ' + [...wanted.keys()][0] + ' is not on this challan.' }, 422);
+  }
+
+  const rid = new Types.ObjectId().toString();
+  await IcDeliveryChallan.collection.updateOne(
+    { _id: new Types.ObjectId(String(challan._id)) },
+    {
+      $push: {
+        returnRequests: {
+          rid,
+          at: new Date(),
+          by: session.name || session.email || '',
+          lines: logged,
+          status: 'pending',
+        },
+      },
+    }
+  );
+
+  return json({ ok: true, rid, requested: logged });
+}
+
+/* The SENDER approves - THIS is what moves the stock: the receiver's rows
+   give the quantity up and the sender's own rows take it back, exactly as
+   the old one-step return did. Guarded on the request still being pending,
+   so two approvers cannot run it twice. */
+async function approveReturn({ challan, body, business, session }) {
+  if (String(challan.businessId) !== business) {
+    return json({ error: 'Only the branch that sent the challan can approve a return request.' }, 403);
+  }
+  const rid = String(body.rid || '');
+  const request = (challan.returnRequests || []).find((r) => String(r.rid) === rid);
+  if (!request) return json({ error: 'That return request was not found.' }, 404);
+  if (request.status !== 'pending') {
+    return json({ error: 'That request was already ' + request.status + '.' }, 409);
+  }
+
+  const wanted = new Map();
+  (request.lines || []).forEach((l) => {
+    const key = String(l.barcodeNo || '').trim().toLowerCase();
+    if (key && Number(l.qty) > 0) wanted.set(key, (wanted.get(key) || 0) + Number(l.qty));
+  });
+  if (!wanted.size) return json({ error: 'That request carries no quantities.' }, 422);
+
+  const lines = Array.isArray(challan.items) ? challan.items : [];
+  const logged = [];
+  const nextItems = lines.map((line) => {
+    const key = String(line.barcodeNo || '').trim().toLowerCase();
+    const want = wanted.get(key);
+    if (!want) return line;
+
+    const already = Number(line.returnedQty) || 0;
+    const left = (Number(line.qty) || 0) - already;
+    if (want > left) {
+      throw Object.assign(new Error(
+        'Only ' + left + ' left to return on barcode ' + (line.barcodeNo || '')
+        + ' - the challan changed since this was requested.'
+      ), { status: 409 });
+    }
+    wanted.delete(key);
+    logged.push({ barcodeNo: line.barcodeNo || '', itemName: line.itemName || '', qty: want });
+    return { ...line, returnedQty: already + want };
+  });
+  if (wanted.size) {
+    return json({ error: 'Barcode ' + [...wanted.keys()][0] + ' is not on this challan.' }, 422);
+  }
+
+  const actedAt = new Date();
+  const actedBy = session.name || session.email || '';
+  const res = await IcDeliveryChallan.collection.updateOne(
+    {
+      _id: new Types.ObjectId(String(challan._id)),
+      returnRequests: { $elemMatch: { rid, status: 'pending' } },
+    },
+    {
+      $set: {
+        items: nextItems,
+        'returnRequests.$.status': 'approved',
+        'returnRequests.$.actedAt': actedAt,
+        'returnRequests.$.actedBy': actedBy,
+      },
+      $push: {
+        returns: { at: actedAt, by: request.by || '', approvedBy: actedBy, lines: logged },
+      },
+    }
+  );
+  if (!res.modifiedCount) {
+    return json({ error: 'That request was acted on by someone else a moment ago. Refresh and try again.' }, 409);
+  }
+
+  /* both ends move, only now: the goods leave the receiver and rejoin the
+     sender's stock. After the document write, so a failure here cannot
+     lose the record of the approval. */
+  await withdrawReceivedStock({ challan, asked: logged });
+  await restoreReturnedStock({ challan, asked: logged, user: session });
+
+  await writeRegister({
+    businessId: challan.toBusinessId,
+    locationId: challan.toLocationId,
+    finYear: challan.finYear || '',
+    type: 'ISSUE',
+    reason: 'Inter Company Return - Damaged',
+    remarks: 'Returned on challan ' + (challan.dcNo || '') + ' (request approved)',
+    items: logged,
+    user: session,
+  });
+
+  return json({ ok: true, id: String(challan._id), returned: logged });
+}
+
+/* The SENDER declines - the request closes and nothing moves anywhere. */
+async function rejectReturn({ challan, body, business, session }) {
+  if (String(challan.businessId) !== business) {
+    return json({ error: 'Only the branch that sent the challan can reject a return request.' }, 403);
+  }
+  const rid = String(body.rid || '');
+  const res = await IcDeliveryChallan.collection.updateOne(
+    {
+      _id: new Types.ObjectId(String(challan._id)),
+      returnRequests: { $elemMatch: { rid, status: 'pending' } },
+    },
+    {
+      $set: {
+        'returnRequests.$.status': 'rejected',
+        'returnRequests.$.actedAt': new Date(),
+        'returnRequests.$.actedBy': session.name || session.email || '',
+      },
+    }
+  );
+  if (!res.modifiedCount) {
+    return json({ error: 'That request was not found, or was already acted on.' }, 409);
+  }
+  return json({ ok: true, id: String(challan._id) });
 }
