@@ -791,17 +791,25 @@ export default function IcChallanForm({ cfg, id }) {
       const it = d.item;
       const key = (v) => String(v || '').trim().toLowerCase();
 
-      /* EVERY scan opens its own row.
+      /* ONE LINE PER BARCODE (user, 01-10-2026). The branch's whole holding
+         of a barcode is one line - maxQty is already the sum across its
+         rows - so a repeat entry is refused and the quantity is edited on
+         the line it already has. Checked on rowsRef, which sees lines added
+         a moment ago that state has not re-rendered yet. */
+      if (rowsRef.current.some((r) => key(r.barcodeNo) === key(it.barcodeNo))) {
+        setFlash({
+          type: 'err',
+          msg: 'Barcode ' + it.barcodeNo + ' is already on this challan - change its QTY on the line instead.',
+        });
+        return;
+      }
 
-         No merging and no duplicate check: the operator enters one barcode,
-         sees one line, enters the next, sees the next line. The same barcode
-         entered twice is two lines, because the branch holds many units under
-         one printed barcode and each line is a separate entry the operator
-         can set a quantity on or delete. */
+      /* the line opens at the FULL quantity the branch holds (the "(MAX)"
+         figure), ready to ship everything - type over it to send less */
       setRows((prev) => [...prev, {
         ...BLANK_ROW, ...it,
         availableQty: it.maxQty ?? null,
-        qty: 1,
+        qty: Number(it.maxQty) > 0 ? Number(it.maxQty) : 1,
       }]);
       setScan('');
     } catch {

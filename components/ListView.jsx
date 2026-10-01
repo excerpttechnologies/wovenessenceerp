@@ -1444,7 +1444,7 @@ import { useRouter } from "next/navigation";
 import Icon from "./Icon";
 import Toolbar from "./Toolbar";
 import ModalForm from "./ModalForm";
-import FilterPanel from "./FilterPanel";
+import FilterPanel, { filterDefaults } from "./FilterPanel";
 import { useScope } from "./ScopeContext";
 import { fmt, toCsv, toXlsHtml, download, printTable } from "@/lib/format";
  
@@ -1567,7 +1567,10 @@ export default function ListView({ cfg, slug, reloadKey = 0 }) {
   const [error, setError] = useState(null);
   const [page, setPage] = useState(1);
   const [modal, setModal] = useState(false);
-  const [filters, setFilters] = useState({});
+  /* seeded from the filter specs' `def` values, so a screen whose dates
+     default to today loads today's rows and cards straight away - the same
+     values FilterPanel opens its boxes with */
+  const [filters, setFilters] = useState(() => filterDefaults(cfg.filters));
   const [menuFor, setMenuFor] = useState(null);
   const [viewRow, setViewRow] = useState(null);
 
@@ -2008,47 +2011,68 @@ export default function ListView({ cfg, slug, reloadKey = 0 }) {
       {cfg.summaryCards && state.summary && (
         <div className="mb-3 grid grid-cols-2 gap-3 md:grid-cols-4">
           {cfg.summaryCards.map((c) => (
-            <div
-              key={c.k}
-              /* `breakdownSide: 'right'` puts the breakdown BESIDE the
-                 figure, in the card's right half, instead of under it */
-              className={'card px-4 py-3' + (c.breakdownSide === 'right' ? ' flex items-center gap-4' : '')}
-            >
-              <div className={c.breakdownSide === 'right' ? 'min-w-0 flex-1' : undefined}>
-              <div className="text-[11px] font-semibold uppercase tracking-wide text-inkmuted">
-                {c.label}
+            <div key={c.k} className="card flex items-center gap-4 px-4 py-3">
+              <div className="min-w-0 flex-1">
+                <div className="text-[11px] font-semibold uppercase tracking-wide text-inkmuted">
+                  {c.label}
+                </div>
+                {/* the figure wears the card's own colour, matching its icon */}
+                <div
+                  className={'mt-1 text-[20px] font-bold' + (c.color ? '' : ' text-brand')}
+                  style={c.color ? { color: c.color } : undefined}
+                >
+                  {c.f === "amount"
+                    ? Number(state.summary[c.k] || 0).toFixed(2)
+                    : c.f === "wholeAmount"
+                    ? Math.trunc(Number(state.summary[c.k] || 0))
+                    : (state.summary[c.k] ?? 0)}
+                </div>
+                {/* optional breakdown under the figure - cfg.summaryCards
+                    `breakdown` names a summary key holding [{ label, amount }] */}
+                {c.breakdown && c.breakdownSide !== 'right' && Array.isArray(state.summary[c.breakdown]) && (
+                  <div className="mt-1.5 space-y-0.5 border-t border-line pt-1.5 text-[12px]">
+                    {state.summary[c.breakdown].map((b) => (
+                      <div key={b.label} className="flex justify-between gap-3">
+                        <span className="text-inkmuted">{b.label}</span>
+                        <span className="font-semibold text-ink">
+                          {c.f === "wholeAmount"
+                          ? Math.trunc(Number(b.amount || 0))
+                          : c.f === "qty"
+                          ? Math.round(Number(b.amount || 0) * 100) / 100
+                          : Number(b.amount || 0).toFixed(2)}
+                        </span>
+                      </div>
+                    ))}
+                  </div>
+                )}
               </div>
-              <div className="mt-1 text-[20px] font-bold text-brand">
-                {c.f === "amount"
-                  ? Number(state.summary[c.k] || 0).toFixed(2)
-                  : c.f === "wholeAmount"
-                  ? Math.trunc(Number(state.summary[c.k] || 0))
-                  : (state.summary[c.k] ?? 0)}
-              </div>
-              </div>
-              {/* optional breakdown under the figure - cfg.summaryCards
-                  `breakdown` names a summary key holding [{ label, amount }] */}
-              {c.breakdown && Array.isArray(state.summary[c.breakdown]) && (
-                <div className={c.breakdownSide === 'right'
-                  /* a two-column grid: each amount sits right after its
-                     label, not pushed to the far edge of the card */
-                  ? 'grid grid-cols-[auto_auto] items-baseline gap-x-2 gap-y-0.5 border-l border-line pl-4 text-[12px]'
-                  : 'mt-1.5 space-y-0.5 border-t border-line pt-1.5 text-[12px]'}>
+              {/* `breakdownSide: 'right'` puts the breakdown BESIDE the
+                  figure, each amount right after its label */}
+              {c.breakdown && c.breakdownSide === 'right' && Array.isArray(state.summary[c.breakdown]) && (
+                <div className="grid grid-cols-[auto_auto] items-baseline gap-x-2 gap-y-0.5 border-l border-line pl-4 text-[12px]">
                   {state.summary[c.breakdown].map((b) => (
-                    <div key={b.label} className={c.breakdownSide === 'right' ? 'contents' : 'flex justify-between gap-3'}>
+                    <div key={b.label} className="contents">
                       <span className="text-inkmuted">{b.label}</span>
                       <span className="font-semibold text-ink">
                         {c.f === "wholeAmount"
                           ? Math.trunc(Number(b.amount || 0))
                           : c.f === "qty"
-                          /* a quantity keeps a real fraction (2.5 metres)
-                             but drops a pointless one (12, not 12.00) */
                           ? Math.round(Number(b.amount || 0) * 100) / 100
                           : Number(b.amount || 0).toFixed(2)}
                       </span>
                     </div>
                   ))}
                 </div>
+              )}
+              {/* the card's mark, far right, in the figure's colour on a
+                  tint of it */}
+              {c.icon && (
+                <span
+                  className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full"
+                  style={{ backgroundColor: (c.color || '#2563a9') + '1a', color: c.color || '#2563a9' }}
+                >
+                  <Icon name={c.icon} size={20} stroke={2} />
+                </span>
               )}
             </div>
           ))}

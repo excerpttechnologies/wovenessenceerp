@@ -286,7 +286,7 @@
 export const FIELDS = [
   { k: 'toBusinessId', label: 'Business', type: 'ref', ref: 'business', req: true },
   { k: 'toLocationId', label: 'Location Name', type: 'ref', ref: 'companylocations', req: true },
-  { k: 'customerWaybill', label: 'Customer Waybill', type: 'file', info: true },
+  // { k: 'customerWaybill', label: 'Customer Waybill', type: 'file', info: true },
   { k: 'customerGstn', label: 'Customer GSTN', type: 'text', readOnly: true },
 
   { k: 'dcDate', label: 'DC Date', type: 'date', req: true, def: 'today' },

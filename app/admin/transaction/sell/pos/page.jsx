@@ -174,14 +174,16 @@ const CONFIG = {
      one net figure, because a day can be busy and still leave money on the
      counter - which is exactly what the two numbers together say. */
   summaryCards: [
-    { k: 'count', label: 'Total Invoices' },
-    { k: 'totalAmount', label: 'Total Amount', f: 'wholeAmount' },
-    { k: 'paid', label: 'Collected', f: 'wholeAmount', breakdown: 'paidBy', breakdownSide: 'right' },
+    { k: 'count', label: 'Total Invoices', icon: 'voucher', color: '#2563a9' },
+    { k: 'totalAmount', label: 'Total Amount', f: 'wholeAmount', icon: 'chart', color: '#7c3aed' },
+    { k: 'paid', label: 'Collected', f: 'wholeAmount', breakdown: 'paidBy', breakdownSide: 'right', icon: 'cash', color: '#16a34a' },
     // { k: 'sellDue', label: 'Outstanding', f: 'wholeAmount' },
-    { k: 'totalQty', label: 'Qty Sold', f: 'qty', breakdown: 'qtyBy', breakdownSide: 'right' },
+    { k: 'totalQty', label: 'Qty Sold', f: 'qty', breakdown: 'qtyBy', breakdownSide: 'right', icon: 'box', color: '#f59e0b' },
   ],
   filters: [
     { k: "invoiceNo", label: "Invoice No", type: "text" },
+    /* the CARDS default to today (the server narrows the summary when no
+       dates are set - see /api/sell-pos); the LIST below stays unfiltered */
     { k: "startDate", label: "Start Date", type: "date" },
     { k: "endDate", label: "End Date", type: "date" },
   ],

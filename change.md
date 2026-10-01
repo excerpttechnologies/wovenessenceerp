@@ -1,5 +1,16 @@
 # Changes
 
+## 01-10-2026
+
+### EXISTING
+
+- app/admin/transaction/sell/pos/page.jsx
+- app/api/sell-pos/route.js
+- components/FilterPanel.jsx
+- components/ListView.jsx
+- components/PosInvoiceView.jsx
+- components/IcChallanForm.jsx
+
 ## 30-09-2026
 
 ### NEW

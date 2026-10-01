@@ -105,8 +105,24 @@ export async function GET(req) {
      field - the count would be right while every total came back 0. The same
      trap is documented on /api/ic-delivery-challan.
      ------------------------------------------------------------------ */
+  /* THE CARDS DEFAULT TO TODAY. With no Start/End Date chosen the LIST
+     shows every bill, but the boxes above it read as the day's takings
+     (user, 01-10-2026) - so the summary is narrowed to today's business
+     date unless the operator picked a range, in which case it follows the
+     range exactly as before. Built the same way the client's own date
+     filter builds it, so the two mean the same day. */
+  const hasRange = Boolean(from || to);
+  let summaryFilter = filter;
+  if (!hasRange) {
+    const now = new Date();
+    const p = (n) => String(n).padStart(2, '0');
+    const ymd = now.getFullYear() + '-' + p(now.getMonth() + 1) + '-' + p(now.getDate());
+    summaryFilter = { ...filter, date: { $gte: new Date(ymd), $lte: new Date(ymd + 'T23:59:59') } };
+  }
+  const summaryCount = hasRange ? total : await PosInvoice.countDocuments(summaryFilter);
+
   const idFields = ['businessId', 'locationId', 'customerId', 'counterId'];
-  const matchIds = Object.fromEntries(Object.entries(filter).map(([k, v]) => (
+  const matchIds = Object.fromEntries(Object.entries(summaryFilter).map(([k, v]) => (
     idFields.includes(k) && typeof v === 'string' && isValidObjectId(v)
       ? [k, new Types.ObjectId(v)]
       : [k, v]
@@ -282,7 +298,7 @@ export async function GET(req) {
     }),
     labels: await resolveRefLabels(rows),
     summary: {
-      count: total,
+      count: summaryCount,
       totalAmount: round2(sums && sums.totalAmount),
       paid: round2(sums && sums.paid),
       paidBy: paidByList,
