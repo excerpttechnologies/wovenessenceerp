@@ -1,5 +1,13 @@
 # Changes
 
+## 05-10-2026
+
+### EXISTING
+
+- lib/icStock.js
+- app/api/ic-receive-delivery-challan/route.js
+- app/admin/transaction/intercompanysell/receivedeliverychallan/page.jsx
+
 ## 01-10-2026
 
 ### NEW
@@ -271,3 +279,28 @@
 - app/api/ic-receive-delivery-challan/route.js
 - app/admin/transaction/intercompanysell/receivedeliverychallan/page.jsx
 - package.json
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+# everything in the file
+node --env-file=.env restore-barcodes.mjs .backups/deleted-6A-7A-barcodes-2026-10-01.json
+
+# only one series from the file
+node --env-file=.env restore-barcodes.mjs .backups/deleted-6A-7A-barcodes-2026-10-01.json 6A

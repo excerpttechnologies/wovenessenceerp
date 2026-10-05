@@ -170,8 +170,14 @@ export default function ReceiveDeliveryChallanPage() {
     .reduce((a, r) => a + (r.lines || [])
       .filter((l) => String(l.barcodeNo || '').trim().toLowerCase() === String(line.barcodeNo || '').trim().toLowerCase())
       .reduce((n, l) => n + (Number(l.qty) || 0), 0), 0);
-  const leftToReturn = (row, line) =>
-    (Number(line.qty) || 0) - (Number(line.returnedQty) || 0) - pendingOf(row, line);
+  /* capped at what the store still holds from this challan (row.stockLeft,
+     from the API): a piece already SOLD at the POS cannot be returned */
+  const leftToReturn = (row, line) => {
+    const byChallan = (Number(line.qty) || 0) - (Number(line.returnedQty) || 0);
+    const key = String(line.barcodeNo || '').trim().toLowerCase();
+    const onHand = row.stockLeft ? (Number(row.stockLeft[key]) || 0) : byChallan;
+    return Math.max(0, Math.min(byChallan, onHand) - pendingOf(row, line));
+  };
 
   /* Send back only the lines with a quantity typed against them. */
   async function sendReturn(row) {
@@ -200,6 +206,9 @@ export default function ReceiveDeliveryChallanPage() {
       const total = lines.reduce((a, l) => a + l.qty, 0);
       setFlash({ type: 'ok', msg: 'Return request for ' + total + ' sent to the sender for approval - challan ' + (row.dcNo || '') + '.' });
       setReturnQty({});
+      /* the request is sent - close the popup so the success message on the
+         page is what the operator sees */
+      setDetailRow(null);
       load();
     } catch {
       setFlash({ type: 'err', msg: 'Could not record the return.' });

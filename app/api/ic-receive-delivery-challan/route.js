@@ -4,7 +4,7 @@ import IcDeliveryChallan from '@/models/IcDeliveryChallan';
 import { requireSession } from '@/lib/session';
 import { resolveRefLabels } from '@/lib/refLabels';
 import { escapeRegex } from '@/lib/validate';
-import { restoreReturnedStock, withdrawReceivedStock } from '@/lib/icStock';
+import { receivedInStock, restoreReturnedStock, withdrawReceivedStock } from '@/lib/icStock';
 import { receiveChallan } from '@/lib/icReceive';
 import StockAdjustment from '@/models/StockAdjustment';
 import { nextDocNumber } from '@/lib/docnumber';
@@ -151,8 +151,16 @@ export async function GET(req) {
     .limit(perPage)
     .lean();
 
+  /* what the receiver still holds from each received challan, per barcode -
+     the screen caps "Return Qty" at it (a sold piece cannot go back) */
+  const held = await receivedInStock(rows.filter((r) => r.receivedAt).map((r) => r._id));
+
   return json({
-    rows: rows.map((r) => ({ ...r, _id: String(r._id) })),
+    rows: rows.map((r) => ({
+      ...r,
+      _id: String(r._id),
+      ...(r.receivedAt ? { stockLeft: Object.fromEntries(held.get(String(r._id)) || []) } : {}),
+    })),
     labels: await resolveRefLabels(rows),
     total,
     page,
@@ -271,6 +279,9 @@ async function requestReturn({ challan, body, business, session }) {
   if (!wanted.size) return json({ error: 'Enter a quantity to return.' }, 400);
 
   const pending = pendingByKey(challan);
+  /* what this store STILL HOLDS from the challan - sold pieces are gone and
+     cannot be sent back, however many the challan carried */
+  const inStock = (await receivedInStock([challan._id])).get(String(challan._id)) || new Map();
   const logged = [];
   for (const line of (Array.isArray(challan.items) ? challan.items : [])) {
     const key = String(line.barcodeNo || '').trim().toLowerCase();
@@ -279,11 +290,14 @@ async function requestReturn({ challan, body, business, session }) {
 
     const already = Number(line.returnedQty) || 0;
     const held = pending.get(key) || 0;
-    const left = (Number(line.qty) || 0) - already - held;
+    const onHand = inStock.get(key) || 0;
+    const left = Math.max(0, Math.min((Number(line.qty) || 0) - already, onHand) - held);
     if (want > left) {
       throw Object.assign(new Error(
         'Only ' + left + ' left to request on barcode ' + (line.barcodeNo || '')
-        + (held ? ' (' + held + ' already awaiting approval)' : '') + '.'
+        + ' - ' + onHand + ' still in stock here'
+        + (held ? ', ' + held + ' already awaiting approval' : '')
+        + ' (sold pieces cannot be returned).'
       ), { status: 422 });
     }
     wanted.delete(key);
@@ -335,12 +349,22 @@ async function approveReturn({ challan, body, business, session }) {
   if (!wanted.size) return json({ error: 'That request carries no quantities.' }, 422);
 
   const lines = Array.isArray(challan.items) ? challan.items : [];
+  /* the receiver may have SOLD pieces since asking - approving more than it
+     still holds would hand the sender stock that no longer exists */
+  const inStock = (await receivedInStock([challan._id])).get(String(challan._id)) || new Map();
   const logged = [];
   const nextItems = lines.map((line) => {
     const key = String(line.barcodeNo || '').trim().toLowerCase();
     const want = wanted.get(key);
     if (!want) return line;
 
+    const onHand = inStock.get(key) || 0;
+    if (want > onHand) {
+      throw Object.assign(new Error(
+        'The receiving store now holds only ' + onHand + ' of barcode ' + (line.barcodeNo || '')
+        + ' (the rest was sold). Reject this request and ask them to raise it again.'
+      ), { status: 409 });
+    }
     const already = Number(line.returnedQty) || 0;
     const left = (Number(line.qty) || 0) - already;
     if (want > left) {
