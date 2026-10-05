@@ -26,8 +26,10 @@ const POS_RETURN = { screen: SCREENS.POS_RETURN, label: 'POS returns' };
 import {
   withTransaction, loadUnits, returnSoldUnits, barcodeCandidates, linesAnswering, lineBarcodeSpellings,
   unitsByCode, InventoryError, BARCODE_STATUS,
+  inHandQty,
 } from '@/lib/inventory';
 import { barcodeKey, sameBarcode } from '@/lib/barcodeValue';
+import { BarcodeLabel } from '@/lib/barcodeLabel';
 
 /* /api/sell-pos-return - list + create. */
 
@@ -272,11 +274,49 @@ export const POST = handler(async (req) => {
 
     const [credit] = await PosReturn.create([doc], dbSession ? { session: dbSession } : {});
 
-    /* back into sellable stock at the till's location, guarded on SOLD so a
-       unit that is not actually sold cannot be "returned" into existence */
+    /* WHICH ROWS, AND HOW MUCH. A bill may have taken only part of a batch
+       row, or drawn one line from several rows - each sale is logged on the
+       row's sales[] (lib/inventory.js sellUnits). So the rows that carry a
+       sale for THIS bill are found first, and the line's quantity goes back
+       to them, each up to what it gave this bill. A line whose rows predate
+       sales[] falls back to the unit loadUnits picked, returned whole. */
+    const tied = await BarcodeLabel.collection.find(
+      {
+        businessId: String(invoice.businessId),
+        $or: [{ 'sales.invoiceId': invoice._id }, { billingId: invoice._id }],
+      },
+      dbSession ? { session: dbSession } : {}
+    ).toArray();
+    const saleOn = (row) => (Array.isArray(row.sales) ? row.sales : [])
+      .find((e) => String(e.invoiceId) === String(invoice._id));
+
+    const toReturn = [];
+    const qtyByUnit = new Map();
+    lines.forEach((line) => {
+      let need = Number(line.qty) || 0;
+      const rows = tied.filter((r) => saleOn(r)
+        && (sameBarcode(r.barcodeNo, line.barcodeNo) || sameBarcode(r.barcodeGenerated, line.barcodeNo)));
+      rows.forEach((row) => {
+        const e = saleOn(row);
+        const open = Math.round((Number(e.qty) - (Number(e.returnedQty) || 0)) * 1000) / 1000;
+        const take = Math.min(need, open);
+        if (take <= 0) return;
+        toReturn.push(row);
+        qtyByUnit.set(String(row._id), take);
+        need = Math.round((need - take) * 1000) / 1000;
+      });
+      if (!rows.length) {
+        const unit = unitOf.get(barcodeKey(line.barcodeNo));
+        if (unit) toReturn.push(unit);
+      }
+    });
+
+    /* back into sellable stock at the till's location - guarded, so a unit
+       that is not actually sold cannot be "returned" into existence */
     await returnSoldUnits({
-      units, credit, locationId, businessId, reason,
+      units: toReturn, credit, locationId, businessId, reason,
       user: session, session: dbSession,
+      invoiceId: invoice._id, qtyByUnit,
     });
 
     return credit;

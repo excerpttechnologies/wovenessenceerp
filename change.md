@@ -7,6 +7,12 @@
 - lib/icStock.js
 - app/api/ic-receive-delivery-challan/route.js
 - app/admin/transaction/intercompanysell/receivedeliverychallan/page.jsx
+- lib/inventory.js
+- lib/barcodeLabel.js
+- app/api/sell-pos/route.js
+- app/api/sell-pos-return/route.js
+- app/api/ic-item-invoice/route.js
+- app/admin/transaction/intercompanysell/sales-invoice/page.jsx
 
 ## 01-10-2026
 

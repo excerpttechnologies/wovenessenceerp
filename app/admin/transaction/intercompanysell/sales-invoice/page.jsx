@@ -89,9 +89,9 @@ export default function IcItemSalesInvoicePage() {
 
   const toggle = (id) => setPicked((p) => (p.includes(id) ? p.filter((x) => x !== id) : [...p, id]));
   const allTicked = pending.length > 0 && picked.length === pending.length;
-  const toggleAll = () => setPicked(allTicked ? [] : pending.map((r) => r.barcodeId));
+  const toggleAll = () => setPicked(allTicked ? [] : pending.map((r) => r.key));
 
-  const pickedRows = useMemo(() => pending.filter((r) => picked.includes(r.barcodeId)), [pending, picked]);
+  const pickedRows = useMemo(() => pending.filter((r) => picked.includes(r.key)), [pending, picked]);
   const pickedValue = pickedRows.reduce((a, r) => a + Number(r.netAmount || 0), 0);
   /* one invoice per receiver - say up front how many will be raised */
   const pickedReceivers = new Set(pickedRows.map((r) => r.toBusinessId || r.toBusinessName)).size;
@@ -189,16 +189,16 @@ export default function IcItemSalesInvoicePage() {
             )}
             {!loading && pending.map((r) => (
               <tr
-                key={r.barcodeId}
-                className={picked.includes(r.barcodeId) ? 'bg-[#f0f7ff]' : 'cursor-pointer'}
-                onClick={() => toggle(r.barcodeId)}
+                key={r.key}
+                className={picked.includes(r.key) ? 'bg-[#f0f7ff]' : 'cursor-pointer'}
+                onClick={() => toggle(r.key)}
               >
                 <td onClick={(e) => e.stopPropagation()}>
                   <input
                     type="checkbox"
                     aria-label={'Bill ' + (r.barcodeNo || r.itemName)}
-                    checked={picked.includes(r.barcodeId)}
-                    onChange={() => toggle(r.barcodeId)}
+                    checked={picked.includes(r.key)}
+                    onChange={() => toggle(r.key)}
                   />
                 </td>
                 <td className="font-semibold">{r.toBusinessName || '-'}</td>

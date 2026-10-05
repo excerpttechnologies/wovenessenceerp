@@ -1,4 +1,4 @@
-import { isValidObjectId } from 'mongoose';
+import { isValidObjectId, Types } from 'mongoose';
 import dbConnect from '@/lib/db';
 import IcItemInvoice from '@/models/IcItemInvoice';
 import IcDeliveryChallan from '@/models/IcDeliveryChallan';
@@ -41,9 +41,27 @@ const json = (d, s = 200) => Response.json(d, {
 
 const IC_SI = { screen: SCREENS.IC_ITEM_INVOICE, label: 'inter company sales invoices' };
 
+/* "rowId:posInvoiceId" for a logged sale, "rowId" for an older row */
+const saleKey = (row, sale) => String(row._id) + (sale ? ':' + String(sale.invoiceId) : '');
+const unbilled = (e) => !e.icBilledId && num(e.qty) - num(e.returnedQty) > 0;
+
+/* What may still be billed from a row: each logged sale not billed yet and
+   not returned in full - or, for a row sold before sales[] existed, the row
+   itself while it is SOLD and unbilled. -> [{ row, sale|null }] */
+function billable(row) {
+  if (Array.isArray(row.sales) && row.sales.length) {
+    return row.sales.filter(unbilled).map((sale) => ({ row, sale }));
+  }
+  return row.status === BARCODE_STATUS.SOLD && !row.icBilledId ? [{ row, sale: null }] : [];
+}
+
 /* one invoice line for a sold receiver-side row */
-function buildLine({ row, challan, posLine }) {
-  const qty = num(posLine?.qty) || num(row.qtyNum) || 1;
+function buildLine({ row, challan, posLine, sale = null }) {
+  /* a sales[] entry bills what that bill took, less anything the customer
+     brought back; an older row without sales[] bills its POS line */
+  const qty = sale
+    ? r2(num(sale.qty) - num(sale.returnedQty))
+    : (num(posLine?.qty) || num(row.qtyNum) || 1);
   const line = (challan?.items || []).find((l) =>
     (l.stockMoves || []).some((m) => String(m.barcodeId) === String(row.sourceBarcodeId)));
 
@@ -97,14 +115,18 @@ function buildLine({ row, challan, posLine }) {
   }
 
   return {
+    /* the tick-box key: one per SALE of a row, since a batch row can be
+       sold - and billed - in several parts */
+    key: saleKey(row, sale),
+    saleInvoiceId: sale ? String(sale.invoiceId) : '',
     barcodeId: String(row._id),
     sourceBarcodeId: String(row.sourceBarcodeId || ''),
     barcodeNo: row.barcodeNo || row.barcodeGenerated || '',
     dcId: challan ? String(challan._id) : String(row.icChallanId || ''),
     dcNo: challan?.dcNo || row.icChallanNo || '',
     qty,
-    posInvoiceNo: posLine?.invoiceNo || row.billingNo || '',
-    soldAt: posLine?.soldAt || row.soldAt || null,
+    posInvoiceNo: sale?.invoiceNo || posLine?.invoiceNo || row.billingNo || '',
+    soldAt: posLine?.soldAt || sale?.at || row.soldAt || null,
     ...priced,
   };
 }
@@ -118,13 +140,16 @@ async function joins(rows, senderBusinessId) {
     : [];
   const challanById = new Map(challans.map((c) => [String(c._id), c]));
 
-  const billingIds = [...new Set(rows.map((r) => String(r.billingId || '')).filter(isValidObjectId))];
+  const billingIds = [...new Set(rows.flatMap((r) => [
+    String(r.billingId || ''),
+    ...(Array.isArray(r.sales) ? r.sales.map((e) => String(e.invoiceId || '')) : []),
+  ]).filter(isValidObjectId))];
   const posInvoices = billingIds.length
     ? await PosInvoice.find({ _id: { $in: billingIds } }).select('invoiceNo items createdAt').lean()
     : [];
   const posById = new Map(posInvoices.map((p) => [String(p._id), p]));
-  const posLineFor = (row) => {
-    const inv = posById.get(String(row.billingId || ''));
+  const posLineFor = (row, sale = null) => {
+    const inv = posById.get(String(sale ? sale.invoiceId : (row.billingId || '')));
     if (!inv) return null;
     const line = (inv.items || []).find((l) => sameBarcode(l.barcodeNo, row.barcodeNo));
     /* soldAt: the POS invoice's createdAt is the real moment of the sale.
@@ -201,19 +226,23 @@ export async function GET(req) {
 
   /* receiver-side rows from those challans that the receiver has SOLD and
      the sender has not billed */
-  const rows = await BarcodeLabel.find({
+  /* raw driver: sales[] is new on the schema (see the claim below) */
+  const rows = await BarcodeLabel.collection.find({
     icChallanId: { $in: challanIds },
-    status: BARCODE_STATUS.SOLD,
-    $or: [{ icBilledId: null }, { icBilledId: { $exists: false } }],
-  }).sort({ soldAt: -1 }).limit(300).lean();
+    $or: [
+      { 'sales.0': { $exists: true } },
+      { status: BARCODE_STATUS.SOLD, $or: [{ icBilledId: null }, { icBilledId: { $exists: false } }] },
+    ],
+  }).sort({ updatedAt: -1 }).limit(500).toArray();
+  const items = rows.flatMap(billable);
 
   const { challanById, posLineFor } = await joins(rows, business);
   const nameOf = await businessNames(rows.map((r) => challanById.get(String(r.icChallanId))?.toBusinessId).filter(Boolean));
 
   return json({
-    rows: rows.map((row) => {
+    rows: items.map(({ row, sale }) => {
       const challan = challanById.get(String(row.icChallanId)) || null;
-      const line = buildLine({ row, challan, posLine: posLineFor(row) });
+      const line = buildLine({ row, challan, posLine: posLineFor(row, sale), sale });
       return {
         ...line,
         toBusinessId: challan ? String(challan.toBusinessId || '') : '',
@@ -240,25 +269,34 @@ export async function POST(req) {
   });
   if (denied) return json({ error: denied.message, code: denied.code }, 403);
 
-  const ids = [...new Set((body.data?.barcodeIds || []).map(String).filter(isValidObjectId))];
-  if (!ids.length) return json({ error: 'Tick the sold items to bill first.' }, 422);
+  /* the ticked keys - "rowId:posInvoiceId" per logged sale, a bare rowId
+     for an older row (see saleKey) */
+  const keys = [...new Set((body.data?.barcodeIds || []).map(String))]
+    .filter((k) => k.split(':').every(isValidObjectId));
+  if (!keys.length) return json({ error: 'Tick the sold items to bill first.' }, 422);
 
-  const rows = await BarcodeLabel.find({ _id: { $in: ids } }).lean();
-  if (rows.length !== ids.length) {
-    return json({ error: 'Some of the ticked items no longer exist. Refresh and try again.' }, 409);
-  }
+  const rowIds = [...new Set(keys.map((k) => k.split(':')[0]))];
+  const found = await BarcodeLabel.collection.find({ _id: { $in: rowIds.map((v) => new Types.ObjectId(v)) } }).toArray();
+  const byId = new Map(found.map((r) => [String(r._id), r]));
 
-  /* every row must be a receiver-side unit from one of THIS sender's
-     challans, sold, and not billed yet */
+  /* every key must be a sale of a receiver-side unit from one of THIS
+     sender's challans that is still unbilled */
   const bad = [];
-  rows.forEach((r) => {
-    if (r.status !== BARCODE_STATUS.SOLD) bad.push((r.barcodeNo || r._id) + ' (not sold any more)');
-    else if (r.icBilledId) bad.push((r.barcodeNo || r._id) + ' (already billed on ' + (r.icBilledNo || 'an invoice') + ')');
-    else if (!isValidObjectId(String(r.icChallanId || ''))) bad.push((r.barcodeNo || r._id) + ' (not from an inter company challan)');
+  const picked = [];
+  keys.forEach((k) => {
+    const [rid, invId] = k.split(':');
+    const r = byId.get(rid);
+    if (!r) { bad.push(rid + ' (no longer exists)'); return; }
+    const name = r.barcodeNo || rid;
+    if (!isValidObjectId(String(r.icChallanId || ''))) { bad.push(name + ' (not from an inter company challan)'); return; }
+    const hit = billable(r).find(({ sale }) => (sale ? String(sale.invoiceId) === invId : !invId));
+    if (!hit) { bad.push(name + ' (already billed, or returned)'); return; }
+    picked.push(hit);
   });
   if (bad.length) {
     return json({ error: 'Cannot bill: ' + bad.slice(0, 6).join(', ') + '. Refresh and try again.' }, 409);
   }
+  const rows = [...new Map(picked.map(({ row }) => [String(row._id), row])).values()];
 
   const { challanById, posLineFor } = await joins(rows, businessId);
   const orphan = rows.filter((r) => !challanById.get(String(r.icChallanId)));
@@ -272,20 +310,21 @@ export async function POST(req) {
   /* ONE INVOICE PER RECEIVER - group the ticked rows by the challan's
      destination business */
   const groups = new Map();
-  rows.forEach((r) => {
-    const challan = challanById.get(String(r.icChallanId));
+  picked.forEach((p) => {
+    const challan = challanById.get(String(p.row.icChallanId));
     const key = String(challan.toBusinessId || '');
     if (!groups.has(key)) groups.set(key, { challan, rows: [] });
-    groups.get(key).rows.push(r);
+    groups.get(key).rows.push(p);
   });
   const nameOf = await businessNames([...groups.keys()]);
 
   const created = [];
   for (const [toBusinessId, group] of groups) {
-    const lines = group.rows.map((row) => buildLine({
+    const lines = group.rows.map(({ row, sale }) => buildLine({
       row,
+      sale,
       challan: challanById.get(String(row.icChallanId)),
-      posLine: posLineFor(row),
+      posLine: posLineFor(row, sale),
     }));
 
     const taxableValue = r2(lines.reduce((a, l) => a + num(l.beforeTax), 0));
@@ -327,20 +366,33 @@ export async function POST(req) {
        the schema, and a dev server still holding the previously compiled
        model drops the $set silently - the invoice saved while the rows
        stayed "not billed". .collection bypasses the cached schema. */
-    const claim = await BarcodeLabel.collection.updateMany(
-      {
-        _id: { $in: group.rows.map((r) => r._id) },
-        $or: [{ icBilledId: null }, { icBilledId: { $exists: false } }],
-      },
-      { $set: { icBilledId: invoice._id, icBilledNo: invoiceNo } }
-    );
+    /* one guarded claim per SALE: a logged sale is stamped inside sales[],
+       an older row on the row itself */
+    let claimed = 0;
+    for (const { row, sale } of group.rows) {
+      const res = sale
+        ? await BarcodeLabel.collection.updateOne(
+          { _id: row._id, sales: { $elemMatch: { invoiceId: sale.invoiceId, icBilledId: null } } },
+          { $set: { 'sales.$.icBilledId': invoice._id, 'sales.$.icBilledNo': invoiceNo } }
+        )
+        : await BarcodeLabel.collection.updateOne(
+          { _id: row._id, $or: [{ icBilledId: null }, { icBilledId: { $exists: false } }] },
+          { $set: { icBilledId: invoice._id, icBilledNo: invoiceNo } }
+        );
+      claimed += res.modifiedCount;
+    }
 
-    if (claim.modifiedCount !== group.rows.length) {
+    if (claimed !== group.rows.length) {
       /* someone billed one of them between the read and the write - undo
          this invoice; the ones already created for other receivers stand */
       await BarcodeLabel.collection.updateMany(
         { icBilledId: invoice._id },
         { $set: { icBilledId: null, icBilledNo: '' } }
+      );
+      await BarcodeLabel.collection.updateMany(
+        { 'sales.icBilledId': invoice._id },
+        { $set: { 'sales.$[s].icBilledId': null, 'sales.$[s].icBilledNo': '' } },
+        { arrayFilters: [{ 's.icBilledId': invoice._id }] }
       );
       await IcItemInvoice.findByIdAndDelete(invoice._id);
       return json({

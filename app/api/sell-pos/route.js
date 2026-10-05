@@ -12,9 +12,10 @@ import { resolveRefLabels } from '@/lib/refLabels';
 import { validate, escapeRegex } from '@/lib/validate';
 import { nextDocNumber } from '@/lib/docnumber';
 import {
-  withTransaction, loadUnits, sellUnits, unitsByCode, InventoryError, BARCODE_STATUS,
+  withTransaction, loadUnits, sellUnits, unitsByCode, InventoryError, BARCODE_STATUS, inHandQty,
 } from '@/lib/inventory';
 import { barcodeKey, sameBarcode } from '@/lib/barcodeValue';
+import { BarcodeLabel } from '@/lib/barcodeLabel';
 import { uomTypeOf } from '@/lib/barcodeUnits';
 import { handler } from '@/lib/apiError';
 import { requirePermission, PERMISSIONS } from '@/lib/rbac';
@@ -528,9 +529,55 @@ export const POST = handler(async (req) => {
 
     /* The write that was missing entirely: without it a barcode stayed in
        stock after being billed and could be sold again from another till. */
+    /* HOW MUCH EACH ROW GIVES UP. The bill's line quantity, not the whole
+       row: a batch row holding 3 pieces sells 1 and keeps 2 (see sellUnits).
+       A line asking for more than its row holds draws the rest from other
+       in-stock rows of the same barcode at this business (an IC challan can
+       land one barcode as several rows); short even then, the bill is
+       refused rather than selling stock that is not there. */
+    const toSell = [...units];
+    const qtyByUnit = new Map();
     if (units.length) {
+      const asked = new Map();
+      (doc.items || []).forEach((l) => {
+        const unit = l.barcodeNo ? unitOf.get(barcodeKey(l.barcodeNo)) : null;
+        const q = Number(l.qty);
+        if (unit && q > 0) asked.set(String(unit._id), (asked.get(String(unit._id)) || 0) + q);
+      });
+      const taken = new Set(units.map((u) => String(u._id)));
+      for (const unit of units) {
+        let need = asked.get(String(unit._id));
+        if (!(need > 0)) continue;
+        const have = inHandQty(unit);
+        qtyByUnit.set(String(unit._id), Math.min(need, have));
+        need = Math.round((need - have) * 1000) / 1000;
+        if (need <= 0.0005) continue;
+
+        const more = await BarcodeLabel.find({
+          businessId: String(doc.businessId),
+          barcodeNo: unit.barcodeNo,
+          status: BARCODE_STATUS.IN_STOCK,
+          _id: { $nin: [...taken] },
+        }).session(dbSession || null).lean();
+        for (const row of more) {
+          if (need <= 0.0005) break;
+          const take = Math.min(need, inHandQty(row));
+          if (take <= 0) continue;
+          taken.add(String(row._id));
+          toSell.push(row);
+          qtyByUnit.set(String(row._id), take);
+          need = Math.round((need - take) * 1000) / 1000;
+        }
+        if (need > 0.0005) {
+          throw new InventoryError('INSUFFICIENT_QTY',
+            (unit.barcodeNo || '') + ': only ' + Math.round((asked.get(String(unit._id)) - need) * 1000) / 1000
+            + ' in stock, ' + asked.get(String(unit._id)) + ' on the bill.',
+            { status: 409, skipped: [unit.barcodeNo || ''] });
+        }
+      }
+
       await sellUnits({
-        units, invoice, locationId: doc.locationId, user: session, session: dbSession,
+        units: toSell, invoice, locationId: doc.locationId, user: session, session: dbSession, qtyByUnit,
       });
     }
 
