@@ -182,10 +182,10 @@ const CONFIG = {
   ],
   filters: [
     { k: "invoiceNo", label: "Invoice No", type: "text" },
-    /* the CARDS default to today (the server narrows the summary when no
-       dates are set - see /api/sell-pos); the LIST below stays unfiltered */
-    { k: "startDate", label: "Start Date", type: "date" },
-    { k: "endDate", label: "End Date", type: "date" },
+    /* the list (and so the cards) opens on TODAY's bills (user, 05-10-2026); clear the dates
+       to see older ones - Reset brings it back to today */
+    { k: "startDate", label: "Start Date", type: "date", def: "today" },
+    { k: "endDate", label: "End Date", type: "date", def: "today" },
   ],
   columns: [
     /* Business and Location are not listed: this screen is already scoped by

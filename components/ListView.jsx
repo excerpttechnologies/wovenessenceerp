@@ -2419,19 +2419,25 @@ export default function ListView({ cfg, slug, reloadKey = 0 }) {
             </span>
             <span className="flex-1" />
             <span className="flex gap-2">
+              {/* arrows rather than "Previous" / "Next" text; the words stay
+                  as the tooltip and the screen-reader label */}
               <button
-                className="btn"
+                className="btn !px-2.5"
+                title="Previous"
+                aria-label="Previous page"
                 disabled={state.page <= 1}
                 onClick={() => setPage((p) => p - 1)}
               >
-                Previous
+                <Icon name="chevL" size={16} />
               </button>
               <button
-                className="btn"
+                className="btn !px-2.5"
+                title="Next"
+                aria-label="Next page"
                 disabled={state.page >= state.pages}
                 onClick={() => setPage((p) => p + 1)}
               >
-                Next
+                <Icon name="chevR" size={16} />
               </button>
             </span>
           </div>

@@ -2,6 +2,10 @@
 
 ## 05-10-2026
 
+### NEW
+
+- app/admin/report/master-stock-report/layout.js
+
 ### EXISTING
 
 - lib/icStock.js
@@ -13,6 +17,9 @@
 - app/api/sell-pos-return/route.js
 - app/api/ic-item-invoice/route.js
 - app/admin/transaction/intercompanysell/sales-invoice/page.jsx
+- app/admin/transaction/sell/pos/page.jsx
+- components/ListView.jsx
+- components/PosTill.jsx
 
 ## 01-10-2026
 

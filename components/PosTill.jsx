@@ -700,6 +700,23 @@ export default function PosTill() {
     return () => window.removeEventListener('keydown', onKey);
   }, [activeRow, items.length, itemSuggestions.length]);
 
+  /* Esc = BILL IT. With items on the bill and nothing else open, Esc opens
+     the payment popup (Multiple Pay); Esc again closes it back to the bill.
+     Any other popup open (calculator, held bills, customer form, shipping,
+     image preview) keeps Esc for itself. */
+  useEffect(() => {
+    function onEsc(e) {
+      if (e.key !== 'Escape') return;
+      if (showMultiplePay) { e.preventDefault(); setShowMultiplePay(false); return; }
+      if (showCalc || showHolds || showCustomerForm || showShipping || previewImage) return;
+      if (!items.length) return;
+      e.preventDefault();
+      setShowMultiplePay(true);
+    }
+    window.addEventListener('keydown', onEsc);
+    return () => window.removeEventListener('keydown', onEsc);
+  }, [showMultiplePay, showCalc, showHolds, showCustomerForm, showShipping, previewImage, items.length]);
+
   const scannedCodes = useMemo(
     () => items.map((row) => row.barcodeNo).filter(Boolean),
     [items]
@@ -1296,7 +1313,7 @@ export default function PosTill() {
       <div className="flex flex-wrap items-center gap-3 px-4 py-2.5 text-[13.5px]">{/* The till fills the screen and has no sidebar, so without this the only
           way out is the browser's own Back. It goes to the POS list - the
           screen whose ADD button opens this one - and carries the scope so the
-          list lands on the same business, location and year. */}<button type="button" aria-label="Back to POS list" title="Back to POS list" className="flex h-8 w-9 items-center justify-center rounded border border-line bg-white text-ink hover:bg-pillgrey" onClick={() => router.push(`/admin/transaction/sell/pos?business=${business || ''}&location=${location || ''}&finYear=${finYear || ''}`)}><Icon name="back" size={16} /></button><span className="text-inkmuted">Business:</span><select className="f-input w-64" value={business} onChange={(e) => changeBusiness(e.target.value)}><option value="">Select business</option>{businesses.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}</select><span className="text-inkmuted">Location:</span><select className="f-input w-64" value={location} onChange={(e) => setLocation(e.target.value)} disabled={!business}><option value="">Select location</option>{locations.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}</select><span className="flex items-center gap-1.5 text-cell"> {timeStr}</span>{/* calculator sits beside the clock */}<div className="relative"><button type="button" aria-label="Calculator" title="Calculator" className={'flex h-8 w-9 items-center justify-center rounded ' + (showCalc ? 'bg-[#dbe6f7] text-brand' : 'bg-brand text-white')} onClick={() => setShowCalc((v) => !v)}><Icon name="calculator" size={15} /></button>{showCalc && <Calculator onClose={() => setShowCalc(false)} />}</div><span className="flex-1" />{selectedProduct && <div className="flex items-center gap-3 border-l border-line pl-3"><span className="max-w-40 truncate text-[12px] font-semibold">{selectedProduct.barcode || selectedProduct.code}</span><ProductImage src={selectedProduct.image} alt={selectedProduct.name} size={72} onOpen={() => setPreviewImage({ src: selectedProduct.image, alt: selectedProduct.name })} /></div>}{/* The four buttons that sat after the Calculator - refresh, register,
+          list lands on the same business, location and year. */}<button type="button" aria-label="Back to POS list" title="Back to POS list" className="flex h-8 w-9 items-center justify-center rounded border border-line bg-white text-ink hover:bg-pillgrey" onClick={() => router.push(`/admin/transaction/sell/pos?business=${business || ''}&location=${location || ''}&finYear=${finYear || ''}`)}><Icon name="back" size={16} /></button><span className="text-inkmuted">Business:</span><select className="f-input w-64" value={business} onChange={(e) => changeBusiness(e.target.value)}><option value="">Select business</option>{businesses.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}</select><span className="text-inkmuted">Location:</span><select className="f-input w-64" value={location} onChange={(e) => setLocation(e.target.value)} disabled={!business}><option value="">Select location</option>{locations.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}</select><span className="flex items-center gap-1.5 text-cell"> {timeStr}</span>{/* calculator sits beside the clock */}<div className="relative"><button type="button" aria-label="Calculator" title="Calculator" className={'flex h-8 w-9 items-center justify-center rounded ' + (showCalc ? 'bg-[#dbe6f7] text-brand' : 'bg-brand text-white')} onClick={() => setShowCalc((v) => !v)}><Icon name="calculator" size={15} /></button>{showCalc && <Calculator onClose={() => setShowCalc(false)} />}</div>{/* Main Reports, in a tab of its own so the bill in progress stays put */}<button type="button" title="Main Reports - Master Stock Report" className="flex h-8 items-center gap-1.5 rounded bg-brand px-2.5 text-[12.5px] font-semibold text-white hover:opacity-90" onClick={() => window.open('/admin/report/master-stock-report', '_blank')}><Icon name="chart" size={14} /> Main Reports</button><span className="flex-1" />{selectedProduct && <div className="flex items-center gap-3 border-l border-line pl-3"><span className="max-w-40 truncate text-[12px] font-semibold">{selectedProduct.barcode || selectedProduct.code}</span><ProductImage src={selectedProduct.image} alt={selectedProduct.name} size={72} onOpen={() => setPreviewImage({ src: selectedProduct.image, alt: selectedProduct.name })} /></div>}{/* The four buttons that sat after the Calculator - refresh, register,
           ledger and a chevron - are gone. They carried no onClick at all, so
           every one of them was a dead control: it looked pressable and did
           nothing. The Calculator above is the only one of the five that was
