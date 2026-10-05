@@ -3081,7 +3081,7 @@ import Icon from './Icon';
 import { useScope } from './ScopeContext';
 import { useOptions } from './useOptions';
 import ErpSelectorModal from './ErpSelectorModal';
-import { readImport, editRecord, EDIT_FIELDS, FIELD_LABELS } from '@/lib/barcodeReportImport';
+import { readImport, editRecord, EDIT_FIELDS, FIELD_LABELS, REQUIRED } from '@/lib/barcodeReportImport';
 import { imagePlan } from '@/lib/barcodeImage';
 import { BarcodeImageInput, BarcodeImageThumb, uploadBarcodeImage } from './BarcodeImagePicker';
 import {
@@ -3332,6 +3332,12 @@ export default function BarcodeReportImport({ api }) {
   const [dragging, setDragging] = useState(false);
   const fileRef = useRef(null);
   const imageRef = useRef(null);
+  /* quantity adjustments for the current barcode in preview */
+  const [qtyDecrease, setQtyDecrease] = useState(0);
+  const [qtyIncrease, setQtyIncrease] = useState(0);
+  /* validation modal for missing required fields */
+  const [showValidationModal, setShowValidationModal] = useState(false);
+  const [missingFields, setMissingFields] = useState([]);
 
   const target = location || scopeLocation || '';
 
@@ -3370,6 +3376,7 @@ export default function BarcodeReportImport({ api }) {
     setOpen2(new Set()); setConfirming(false); setEdits(new Map()); setCompared(false);
     setLocation(scopeLocation || '');
     dropImages(); setStage(''); clearBarcodeImages();
+    setQtyDecrease(0); setQtyIncrease(0); setShowValidationModal(false); setMissingFields([]);
   }
 
   /* images in: each checked (type, extension, size) before it is kept - and
@@ -3519,6 +3526,10 @@ export default function BarcodeReportImport({ api }) {
     setOpen2(new Set(rows.length <= 3 ? rows.map((r) => r.key) : []));
     setConfirming(false);
     setStep('review');
+    setQtyDecrease(0);
+    setQtyIncrease(0);
+    setShowValidationModal(false);
+    setMissingFields([]);
   }
 
   /* what was read -> the server's verdict on every row (reads only) */
@@ -3678,6 +3689,23 @@ export default function BarcodeReportImport({ api }) {
   function askImport() {
     if (dirty) { recheck(); return; }
     if (replacing) { setConfirming(true); return; }
+    /* Validate required fields before import */
+    const missing = [];
+    const firstRow = review?.rows?.[0];
+    if (firstRow) {
+      const rec = read?.records?.find((x) => x.line === firstRow.line) || { values: firstRow.values };
+      REQUIRED.forEach((key) => {
+        const value = rec.values?.[key];
+        if (value === null || value === undefined || String(value).trim() === '') {
+          missing.push(FIELD_LABELS[key] || key);
+        }
+      });
+    }
+    if (missing.length > 0) {
+      setMissingFields(missing);
+      setShowValidationModal(true);
+      return;
+    }
     runImport();
   }
 
@@ -3713,9 +3741,18 @@ export default function BarcodeReportImport({ api }) {
         });
       }
       setStage(imagesPayload.length ? 'Importing...' : '');
+      /* Apply quantity adjustments to the records */
+      const adjustedRecords = recordsOf(read?.records).map((rec) => {
+        if (isDetails && rec.values) {
+          const currentQty = Number(rec.values.qty) || 0;
+          const finalQty = Math.max(0, currentQty - qtyDecrease + qtyIncrease);
+          return { ...rec, values: { ...rec.values, qty: String(finalQty) } };
+        }
+        return rec;
+      });
       const d = await post({
         mode: 'import',
-        records: recordsOf(read?.records),
+        records: adjustedRecords,
         /* each difference approved, with the saved value it was approved
            against - the server writes it only while that value is still there */
         update: changedRows.filter((r) => pickedOf(r).size).map((r) => ({
@@ -4058,6 +4095,10 @@ export default function BarcodeReportImport({ api }) {
                       onAttachImage={(f) => attachBarcodeImage(r.line, f)}
                       onRemoveImage={() => removeBarcodeImage(r.line)}
                       onDecideImage={(how) => decideBarcodeImage(r.line, how)}
+                      qtyDecrease={qtyDecrease}
+                      qtyIncrease={qtyIncrease}
+                      onQtyDecreaseChange={setQtyDecrease}
+                      onQtyIncreaseChange={setQtyIncrease}
                     />
                   );
                 })}
@@ -4283,6 +4324,29 @@ export default function BarcodeReportImport({ api }) {
         </Modal>
       )}
 
+      {open && step === 'review' && showValidationModal && (
+        <Modal title="Missing Required Fields" onClose={() => setShowValidationModal(false)} size="md">
+          <div className="flex-1 overflow-y-auto p-5 text-[13px]">
+            <div className="mb-3 text-ink">
+              The following required fields are empty and must be filled before importing:
+            </div>
+            <ul className="ml-5 list-disc text-ink">
+              {missingFields.map((field) => (
+                <li key={field}>{field}</li>
+              ))}
+            </ul>
+            <div className="mt-3 text-inkmuted">
+              Please fill in the missing fields and try again.
+            </div>
+          </div>
+          <div className="flex shrink-0 items-center justify-end gap-2 border-t border-line px-5 py-3">
+            <button type="button" className="btn btn-primary" onClick={() => setShowValidationModal(false)} disabled={busy}>
+              Back to Edit
+            </button>
+          </div>
+        </Modal>
+      )}
+
       {open && step === 'done' && result && (
         <Modal title="Import Successful" onClose={close} size="md">
           <div className="flex-1 overflow-y-auto p-5">
@@ -4463,6 +4527,7 @@ function Field({ label, value, original, onChange, readOnly = false, busy = fals
 function DetailsCard({
   rec, row, edits, onEdit, busy, multi, ticked, onTick, picked, decision, onKeep, onReplace, onToggleField, readWarnings,
   barcodeImage, imagePlan: plan, onAttachImage, onRemoveImage, onDecideImage,
+  qtyDecrease, qtyIncrease, onQtyDecreaseChange, onQtyIncreaseChange,
 }) {
   const d = rec.details || {};
   const id = rec.identify || {};
@@ -4607,7 +4672,50 @@ function DetailsCard({
         <div className="grid gap-3 sm:grid-cols-3">
           {field(['stockLocation', 'Location'])}
           {field(['stockPoint', 'Stock Point'])}
-          <Field label="Qty" value={String(summary.qty ?? 0)} readOnly />
+          <Field label="Current Qty" value={String(summary.qty ?? 0)} readOnly />
+        </div>
+        {/* Quantity adjustment controls */}
+        <div className="mt-3 grid gap-3 sm:grid-cols-3">
+          <div>
+            <label className="mb-1 block text-[11px] font-semibold uppercase tracking-wide text-inkmuted">Decrease Qty</label>
+            <input
+              type="number"
+              min="0"
+              step="1"
+              value={qtyDecrease}
+              onChange={(e) => {
+                const val = Math.max(0, Number(e.target.value) || 0);
+                const maxDecrease = Math.floor(summary.qty ?? 0);
+                if (val > maxDecrease) {
+                  onQtyDecreaseChange(maxDecrease);
+                } else {
+                  onQtyDecreaseChange(val);
+                }
+              }}
+              disabled={busy}
+              className="f-input h-[30px] w-full text-[13px]"
+              aria-label="Decrease quantity"
+            />
+          </div>
+          <div>
+            <label className="mb-1 block text-[11px] font-semibold uppercase tracking-wide text-inkmuted">Increase Qty</label>
+            <input
+              type="number"
+              min="0"
+              step="1"
+              value={qtyIncrease}
+              onChange={(e) => onQtyIncreaseChange(Math.max(0, Number(e.target.value) || 0))}
+              disabled={busy}
+              className="f-input h-[30px] w-full text-[13px]"
+              aria-label="Increase quantity"
+            />
+          </div>
+          <div>
+            <label className="mb-1 block text-[11px] font-semibold uppercase tracking-wide text-inkmuted">Final Qty</label>
+            <div className="flex h-[30px] items-center rounded-md border border-linestrong bg-[#f7f9fc] px-2.5 text-[13px] font-semibold text-ink">
+              {String(Math.max(0, (summary.qty ?? 0) - qtyDecrease + qtyIncrease))}
+            </div>
+          </div>
         </div>
         {row.status === 'new' && (
           <div className="mt-2 text-[12.5px] text-inkmuted">

@@ -276,9 +276,11 @@ export async function GET(req) {
      import left the style code in. */
   const groupNameQ = s(sp.get('groupName'));
   if (groupNameQ) {
-    const matchGroups = await ProductGroup.find({
-      name: { $regex: escapeRegex(groupNameQ), $options: 'i' },
-    }).select('_id').lean();
+    const matchGroups = isValidObjectId(groupNameQ)
+      ? await ProductGroup.find({ _id: groupNameQ }).select('_id').lean()
+      : await ProductGroup.find({
+        name: { $regex: escapeRegex(groupNameQ), $options: 'i' },
+      }).select('_id').lean();
     const groupItems = matchGroups.length
       ? await Item.find({ subGroupId: { $in: matchGroups.map((g) => g._id) } })
         .select('itemCode name').lean()
@@ -455,9 +457,12 @@ export async function GET(req) {
     ? await Supplier.find({
       $or: [
         ...(supIds.length ? [{ _id: { $in: supIds.map((v) => new Types.ObjectId(v)) } }] : []),
-        ...(supCodes.length ? [{ contactId: { $in: supCodes } }] : []),
+        ...(supCodes.length ? [{
+          contactId: { $in: supCodes },
+          ...(businessId ? { businessId } : {}),
+        }] : []),
       ],
-    }).select('contactId businessName firstName middleName lastName').lean()
+    }).select('contactId businessName prefix firstName middleName lastName gstStatus billingMobile shippingMobile').lean()
     : [];
   /* businessName is blank on a vendor entered as a person - the same fallback
      lib/refLabels.js and /api/options use */
@@ -511,13 +516,18 @@ export async function GET(req) {
     return {
       _id: String(r._id),
       locationName: locName.get(s(r.currentLocationId) || s(r.locationId)) || EMPTY,
+      itemId: item ? String(item._id) : '',
       groupName: (item && groupName.get(String(item.subGroupId))) || EMPTY,
       /* the Item MASTER's name - never itemCode, printDescription or
          supplierDescription */
       itemName: (item && s(item.name)) || EMPTY,
+      itemCode: s(r.itemCode),
       supplierCode: (sup && s(sup.contactId)) || EMPTY,
       supplierName: (sup && vendorName(sup)) || EMPTY,
+      supplierId: sup ? String(sup._id) : '',
       date: date || null,
+      docNo: s(r.grcNo),
+      stockPoint: s(r.stockPoint),
       age: date ? Math.max(0, Math.floor((asOf - new Date(date).getTime()) / DAY)) : null,
       /* the unit's OWN number, never the composed barcodeGenerated */
       barcodeNumber: s(r.barcodeNo) || EMPTY,

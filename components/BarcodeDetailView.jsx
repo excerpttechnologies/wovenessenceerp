@@ -534,11 +534,23 @@ const when = (v) => (v ? new Date(v).toLocaleString('en-GB') : '-');
 
 /* One labelled value. The label sits above its value so a long branch name
    does not push the column out of shape. */
-function Cell({ label, value, wide = false }) {
+function Cell({ label, value, wide = false, editing = false, type = 'text', onChange }) {
   return (
     <div className={'px-4 py-3 ' + (wide ? 'sm:col-span-2' : '')}>
       <div className="text-[11px] uppercase tracking-wide text-inkmuted">{label}</div>
-      <div className="mt-0.5 text-[13.5px] text-ink">{value}</div>
+      {editing ? (
+        <input
+          aria-label={label}
+          type={type}
+          min={type === 'number' ? '0' : undefined}
+          step={type === 'number' ? 'any' : undefined}
+          className="f-input mt-1 !h-[30px] max-w-[180px]"
+          value={value ?? ''}
+          onChange={(event) => onChange(event.target.value)}
+        />
+      ) : (
+        <div className="mt-0.5 text-[13.5px] text-ink">{value}</div>
+      )}
     </div>
   );
 }
@@ -557,11 +569,26 @@ function Band({ title, children, last = false }) {
   );
 }
 
-export default function BarcodeDetailView({ barcodeNo, onBack }) {
+export default function BarcodeDetailView({ barcodeNo, onBack, onSearch }) {
   const { business } = useScope();
   const [data, setData] = useState(null);
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(true);
+  const [searchTerm, setSearchTerm] = useState(barcodeNo);
+  const [editing, setEditing] = useState(false);
+  const [editQuantity, setEditQuantity] = useState('');
+  const [editRsp, setEditRsp] = useState('');
+  const [saving, setSaving] = useState(false);
+  const [saveError, setSaveError] = useState('');
+  const [saveSuccess, setSaveSuccess] = useState('');
+  const [reloadCount, setReloadCount] = useState(0);
+
+  useEffect(() => {
+    setSearchTerm(barcodeNo);
+    setEditing(false);
+    setSaveError('');
+    setSaveSuccess('');
+  }, [barcodeNo]);
 
   useEffect(() => {
     if (!barcodeNo) return undefined;
@@ -577,6 +604,8 @@ export default function BarcodeDetailView({ barcodeNo, onBack }) {
         if (off) return;
         if (!ok) { setError(d.error || 'Could not load that barcode.'); setData(null); return; }
         setData(d);
+        setEditQuantity(String(d.detail?.quantity ?? ''));
+        setEditRsp(String(d.detail?.rsp ?? ''));
       })
       .catch(() => { if (!off) setError('Could not reach the server.'); })
       .finally(() => { if (!off) setLoading(false); });
@@ -585,7 +614,7 @@ export default function BarcodeDetailView({ barcodeNo, onBack }) {
        the operator has already navigated away from must not paint over the
        one they are looking at now */
     return () => { off = true; };
-  }, [barcodeNo, business]);
+  }, [barcodeNo, business, reloadCount]);
 
   if (loading) return <div className="card"><div className="card-body">Loading barcode {barcodeNo}...</div></div>;
   if (error) {
@@ -604,18 +633,96 @@ export default function BarcodeDetailView({ barcodeNo, onBack }) {
   const d = data?.detail || {};
   const rows = data?.movements || [];
   const history = data?.history || null;
+  const lastMovement = rows[rows.length - 1];
+  const totalReceipts = rows.reduce((total, row) => total + Number(row.receipts || 0), 0);
+  const totalIssues = rows.reduce((total, row) => total + Number(row.issues || 0), 0);
+
+  function startEditing() {
+    setEditQuantity(String(d.quantity ?? ''));
+    setEditRsp(String(d.rsp ?? ''));
+    setSaveError('');
+    setSaveSuccess('');
+    setEditing(true);
+  }
+
+  async function saveDetails() {
+    setSaving(true);
+    setSaveError('');
+    setSaveSuccess('');
+    try {
+      const response = await fetch('/api/reports/barcode-detail', {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          unitId: d.unitId,
+          business: business || '',
+          quantity: editQuantity,
+          rsp: editRsp,
+        }),
+      });
+      const result = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(result.error || 'Could not save barcode details.');
+      setData((current) => (current ? {
+        ...current,
+        detail: { ...current.detail, quantity: result.quantity, rsp: result.rsp },
+      } : current));
+      setEditing(false);
+      setSaveSuccess('Quantity and RSP saved.');
+      setReloadCount((count) => count + 1);
+    } catch (saveErr) {
+      setSaveError(saveErr.message || 'Could not save barcode details.');
+    } finally {
+      setSaving(false);
+    }
+  }
 
   return (
     <>
       <div className="card">
-        <div className="card-head flex items-center justify-between">
+        <div className="card-head flex flex-wrap items-center justify-between gap-2">
           <span className="card-title"><Icon name="barcode" size={15} /> Details</span>
-          <button type="button" className="btn" onClick={onBack}>
-            <Icon name="back" size={14} /> Back
-          </button>
+          <div className="flex flex-wrap items-center justify-end gap-2">
+            <form
+              className="flex items-center gap-1.5"
+              onSubmit={(event) => {
+                event.preventDefault();
+                const value = searchTerm.trim();
+                if (value) onSearch?.(value);
+              }}
+            >
+              <input
+                aria-label="Barcode number"
+                className="f-input !h-[30px] !w-[132px] text-[11px]"
+                value={searchTerm}
+                onChange={(event) => setSearchTerm(event.target.value)}
+              />
+              <button type="submit" className="btn !h-[30px] !px-2.5">
+                <Icon name="search" size={13} /> Search
+              </button>
+            </form>
+            {editing ? (
+              <>
+                <button type="button" className="btn btn-primary !h-[30px] !px-2.5" onClick={saveDetails} disabled={saving}>
+                  {saving ? <span className="spin" /> : <Icon name="save" size={13} />} Save
+                </button>
+                <button type="button" className="btn !h-[30px] !px-2.5" onClick={() => { setEditing(false); setSaveError(''); }} disabled={saving}>
+                  Cancel
+                </button>
+              </>
+            ) : (
+              <button type="button" className="btn !h-[30px] !px-2.5" onClick={startEditing}>
+                <Icon name="pencil" size={13} /> Edit
+              </button>
+            )}
+            <button type="button" className="btn !h-[30px] !px-2.5" onClick={onBack}>
+              <Icon name="back" size={13} /> Back
+            </button>
+          </div>
         </div>
 
         <div className="card-body">
+          {saveError && <div className="flash flash-err" role="alert">{saveError}</div>}
+          {saveSuccess && <div className="flash flash-ok" role="status">{saveSuccess}</div>}
           <div className="flex flex-col gap-4 lg:flex-row">
             <div className="min-w-0 flex-1 overflow-hidden rounded border border-line">
               <Band title="Item Info">
@@ -630,7 +737,13 @@ export default function BarcodeDetailView({ barcodeNo, onBack }) {
                 <Cell label="GST %" value={text(d.gst)} />
                 <Cell label="UOM" value={text(d.uom)} />
                 <Cell label="Status" value={text(d.status)} />
-                <Cell label="Quantity" value={text(d.quantity)} />
+                <Cell
+                  label="Quantity"
+                  value={editing ? editQuantity : text(d.quantity)}
+                  editing={editing}
+                  type="number"
+                  onChange={setEditQuantity}
+                />
               </Band>
 
               <Band title="Other Info">
@@ -641,7 +754,13 @@ export default function BarcodeDetailView({ barcodeNo, onBack }) {
                 <Cell label="Purchase Rate" value={money(d.purchaseRate)} />
                 <Cell label="Discount" value={money(d.discount)} />
                 <Cell label="Final Rate" value={money(d.finalRate)} />
-                <Cell label="RSP" value={money(d.rsp)} />
+                <Cell
+                  label="RSP"
+                  value={editing ? editRsp : money(d.rsp)}
+                  editing={editing}
+                  type="number"
+                  onChange={setEditRsp}
+                />
                 <Cell label="Offer Price" value={money(d.offerPrice)} />
                 <Cell label="WSP" value={money(d.wsp)} />
                 <Cell label="DP" value={money(d.dp)} />
@@ -675,7 +794,14 @@ export default function BarcodeDetailView({ barcodeNo, onBack }) {
               />
               {d.itemImageUrl && (
                 <div className="mt-3">
-                  <BarcodeImageThumb label="Item image (Item Master)" src={d.itemImageUrl} alt={`Item image of ${text(d.itemName)}`} height={120} emptyText="No item image." />
+                  <BarcodeImageThumb
+                    label="Item image (Item Master)"
+                    src={d.itemImageUrl}
+                    alt={`Item image of ${text(d.itemName)}`}
+                    height={120}
+                    emptyText="No item image."
+                    onClick={() => { setModalImageSrc(d.itemImageUrl); setModalImageAlt(`Item image of ${text(d.itemName)}`); setImageModalOpen(true); }}
+                  />
                 </div>
               )}
             </div>
@@ -691,7 +817,7 @@ export default function BarcodeDetailView({ barcodeNo, onBack }) {
                 <tr>
                   {['Location', 'Doc Date', 'Doc No', 'Message', 'Stock Point',
                     'Receipts', 'Issues', 'Balance Qty', 'Final Price', 'Net Amount']
-                    .map((h) => <th key={h}>{h}</th>)}
+                    .map((h) => <th key={h} className="!bg-[#edf4f1] !text-[#536275]">{h}</th>)}
                 </tr>
               </thead>
               <tbody>
@@ -712,15 +838,38 @@ export default function BarcodeDetailView({ barcodeNo, onBack }) {
                     </tr>
                   ))}
               </tbody>
+              {rows.length > 0 && (
+                <tfoot>
+                  <tr className="bg-[#eef1f6] font-bold">
+                    <td colSpan={5} className="text-right">TOTAL</td>
+                    <td>{text(totalReceipts)}</td>
+                    <td>{text(totalIssues)}</td>
+                    <td>{text(lastMovement.balanceQty)}</td>
+                    <td />
+                    <td />
+                  </tr>
+                </tfoot>
+              )}
             </table>
           </div>
 
           {rows.length > 0 && (
-            <div className="mt-2 flex flex-wrap gap-6 rounded bg-[#495464] px-4 py-2 text-[12.5px] text-white">
-              <span>Location: {text(d.currentLocation)}</span>
-              <span>Stock Point: {text(rows[rows.length - 1].stockPoint)}</span>
-              <span>Qty: {rows[rows.length - 1].balanceQty}</span>
-            </div>
+            <table className="dt mt-2">
+              <thead>
+                <tr>
+                  <th className="!bg-[#747e86] !text-white">Location</th>
+                  <th className="!bg-[#747e86] !text-white">Stock Point</th>
+                  <th className="!bg-[#747e86] !text-white">Qty</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr>
+                  <td>{text(d.currentLocation)}</td>
+                  <td>{text(lastMovement.stockPoint)}</td>
+                  <td>{text(lastMovement.balanceQty)}</td>
+                </tr>
+              </tbody>
+            </table>
           )}
         </div>
       </div>
@@ -746,12 +895,31 @@ function BarcodeImagePanel({ detail, business, onSaved }) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
   const [status, setStatus] = useState('');         // '✓ Saved' after a save
+  const [imageModalOpen, setImageModalOpen] = useState(false);
+  const [modalImageSrc, setModalImageSrc] = useState('');
+  const [modalImageAlt, setModalImageAlt] = useState('');
 
   /* a different barcode opened: nothing of the last one's picture stays */
   useEffect(() => {
     setPending((p) => { if (p) URL.revokeObjectURL(p.url); return null; });
     setPicking(false); setConfirmRemove(false); setError(''); setStatus('');
+    setImageModalOpen(false);
+    setModalImageSrc('');
+    setModalImageAlt('');
   }, [detail.unitId]);
+
+  /* Escape key closes the image modal */
+  useEffect(() => {
+    if (!imageModalOpen) return undefined;
+    const onKey = (event) => {
+      if (event.key === 'Escape') {
+        event.preventDefault();
+        setImageModalOpen(false);
+      }
+    };
+    document.addEventListener('keydown', onKey);
+    return () => document.removeEventListener('keydown', onKey);
+  }, [imageModalOpen]);
 
   const pick = (file) => {
     setPending((p) => { if (p) URL.revokeObjectURL(p.url); return { file, url: URL.createObjectURL(file), name: file.name || 'barcode-image' }; });
@@ -808,7 +976,7 @@ function BarcodeImagePanel({ detail, business, onSaved }) {
           <>
             <div className="text-[12px] font-bold uppercase tracking-wide text-[#8a5a00]">Existing barcode image found</div>
             <div className="grid grid-cols-2 gap-2">
-              <BarcodeImageThumb label="Existing image" src={detail.barcodeImageUrl} alt={`Existing barcode image of ${detail.barcodeNo}`} height={110} />
+              <BarcodeImageThumb label="Existing image" src={detail.barcodeImageUrl} alt={`Existing barcode image of ${detail.barcodeNo}`} height={110} onClick={() => { setModalImageSrc(detail.barcodeImageUrl); setModalImageAlt(`Existing barcode image of ${detail.barcodeNo}`); setImageModalOpen(true); }} />
               <BarcodeImageThumb label="New image" src={pending.url} alt={`New barcode image of ${detail.barcodeNo}`} height={110} />
             </div>
             <div className="text-[12.5px] text-ink">Do you want to replace the existing barcode image?</div>
@@ -832,11 +1000,15 @@ function BarcodeImagePanel({ detail, business, onSaved }) {
           </>
         ) : (
           <>
-            <BarcodeImageThumb src={detail.barcodeImageUrl} alt={`Barcode image of ${detail.barcodeNo}`} height={170} />
+            <BarcodeImageThumb
+              src={detail.barcodeImageUrl}
+              alt={`Barcode image of ${detail.barcodeNo}`}
+              height={170}
+              onClick={detail.barcodeImageUrl ? () => { setModalImageSrc(detail.barcodeImageUrl); setModalImageAlt(`Barcode image of ${detail.barcodeNo}`); setImageModalOpen(true); } : null}
+            />
             {saved ? (
               <>
                 {status && <div className="text-[12px] font-semibold text-okgreen" role="status">Status: {status}</div>}
-                <div className="break-all text-[11.5px] text-inkmuted">Image URL: <span className="font-mono">{detail.barcodeImageUrl}</span></div>
                 <div className="flex flex-wrap gap-2">
                   <button type="button" className="btn" onClick={() => { setPicking(true); setError(''); }} disabled={busy}>
                     <Icon name="upload" size={14} /> Replace Image
@@ -873,7 +1045,7 @@ function BarcodeImagePanel({ detail, business, onSaved }) {
             <div className="border-b border-line px-5 py-3 text-[15px] font-bold uppercase tracking-wide">Remove barcode image?</div>
             <div className="space-y-2 p-5 text-[13px]">
               <p>This will remove the barcode image associated with this barcode (<span className="font-mono">{detail.barcodeNo}</span>).</p>
-              <div className="w-[160px]"><BarcodeImageThumb src={detail.barcodeImageUrl} alt={`Barcode image of ${detail.barcodeNo}`} height={100} /></div>
+              <div className="w-[160px]"><BarcodeImageThumb src={detail.barcodeImageUrl} alt={`Barcode image of ${detail.barcodeNo}`} height={100} onClick={() => { setModalImageSrc(detail.barcodeImageUrl); setModalImageAlt(`Barcode image of ${detail.barcodeNo}`); setImageModalOpen(true); }} /></div>
             </div>
             <div className="flex justify-end gap-2 border-t border-line px-5 py-3">
               <button type="button" className="btn" onClick={() => setConfirmRemove(false)} disabled={busy}>Cancel</button>
@@ -881,6 +1053,31 @@ function BarcodeImagePanel({ detail, business, onSaved }) {
                 {busy ? <span className="spin" /> : <Icon name="trash" size={14} />} Remove Image
               </button>
             </div>
+          </div>
+        </div>
+      )}
+
+      {imageModalOpen && modalImageSrc && (
+        <div
+          className="fixed inset-0 z-[90] flex items-center justify-center bg-black/80 p-4"
+          role="dialog"
+          aria-label="Expanded image"
+          onMouseDown={(event) => { if (event.target === event.currentTarget) setImageModalOpen(false); }}
+        >
+          <div className="relative flex max-h-[calc(100vh-2rem)] max-w-[calc(100vw-2rem)] items-center justify-center">
+            <button
+              type="button"
+              onClick={() => setImageModalOpen(false)}
+              aria-label="Close"
+              className="absolute -top-8 right-0 rounded bg-white/10 px-2 py-1 text-2xl leading-none text-white hover:bg-white/20 focus:outline-none focus-visible:ring-2 focus-visible:ring-white"
+            >
+              ×
+            </button>
+            <img
+              src={modalImageSrc}
+              alt={modalImageAlt}
+              className="max-h-[calc(100vh-2rem)] max-w-[calc(100vw-2rem)] object-contain"
+            />
           </div>
         </div>
       )}

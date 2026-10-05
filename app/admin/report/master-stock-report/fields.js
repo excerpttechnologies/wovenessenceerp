@@ -121,7 +121,123 @@ export const REPORT = {
 
      Text filters: name/code fields match case-insensitive "contains".
      Numeric filters: "Min"/"Max" pairs are inclusive (>= / <=); the route
-     must parse them as numbers and ignore blanks. */
+//      must parse them as numbers and ignore blanks. */
+//   filters: [
+//     /* A chip per barcode - type one, press Enter, type the next. A picker
+//        is no use here: there is one barcode per PIECE of stock, so the list
+//        would run to thousands. The route matches a row answering ANY of
+//        them. */
+//     {
+//       k: 'barcodeNo',
+//       label: 'Barcode Number',
+//       type: 'tags',
+//       placeholder: 'Type barcode, press Enter',
+//       /* offers matching numbers as they are typed - see
+//          app/api/reports/barcode-suggest/route.js for why it is its own
+//          route rather than the Barcode Item list. */
+//       suggest: '/api/reports/barcode-suggest',
+//     },
+//     { k: 'groupName', label: 'Group Name', type: 'text', placeholder: 'Group name' },
+//     /* Picked from the Item master, several at a time. The route resolves
+//        each id back to the item's code AND name, because stock rows carry
+//        whichever of the two the import that created them wrote - the same
+//        reason the Group Name filter matches on both. */
+//     { k: 'itemId', label: 'Item Name', type: 'ref', ref: 'item', multi: true, all: 'Type to search' },
+//     { k: 'hsn', label: 'HSN', type: 'text', placeholder: 'HSN code' },
+//     /* GST % is typed, not picked from the Tax master. That master
+//        (models/Tax.js, the ref: 'tax' option list) keys on its own _id and
+//        keeps free text in taxName: 15 rows today, in which "GST 5%",
+//        "GST 5 %" and a bare "GST" all mean 5, "GST 3%" and "GST 15%" appear
+//        twice each, and one row reads igst 212 / cgst 1221. barcodeLabel.gst
+//        stores the PERCENTAGE ITSELF rather than a reference to that master,
+//        so a tax _id could not filter it without inventing a mapping this
+//        database does not have. The route compares the NUMBER, so 5, "5" and
+//        "5.00" all match the one slab. */
+//     { k: 'gst', label: 'GST %', type: 'text', placeholder: 'GST %' },
+
+//     /* CITY FIRST, THEN THE SUPPLIER - the flow the client asked for. The
+//        supplier dropdown stays disabled ("Enter city first") until a city is
+//        typed, and then offers only that city's vendors (billing or shipping
+//        city on the Supplier master, via /api/options&city=). The city alone
+//        already filters the stock; picking suppliers narrows it further, and
+//        several suppliers can be picked at once. */
+//     { k: 'city', label: 'City', type: 'city', placeholder: 'Type city', suggest: '/api/reports/supplier-cities' },
+//     {
+//       k: 'supplierId',
+//       label: 'Supplier Name',
+//       type: 'ref',
+//       ref: 'supplier',
+//       multi: true,
+//       dependsOn: 'city',
+//       dependsParam: 'city',
+//       waitPlaceholder: 'Enter city first',
+//       all: 'Type to search',
+//     },
+//     /* the agent on the Supplier master - the stock of every vendor that
+//        agent covers; several at a time */
+//     { k: 'agentId', label: 'Agent', type: 'ref', ref: 'agent', multi: true, all: 'Type to search' },
+//     { k: 'uom', label: 'UOM', type: 'ref', ref: 'uom', all: 'All UOM' },
+
+//     { k: 'ageMin', label: 'Age Min (days)', type: 'text', placeholder: 'Min age' },
+//     { k: 'ageMax', label: 'Age Max (days)', type: 'text', placeholder: 'Max age' },
+
+//     { k: 'costPriceMin', label: 'Cost Price Min', type: 'text', placeholder: 'Min cost' },
+//     { k: 'costPriceMax', label: 'Cost Price Max', type: 'text', placeholder: 'Max cost' },
+//     { k: 'rspMin', label: 'RSP Min', type: 'text', placeholder: 'Min RSP' },
+//     { k: 'rspMax', label: 'RSP Max', type: 'text', placeholder: 'Max RSP' },
+//     { k: 'discount', label: 'Discount %', type: 'text', placeholder: 'Discount %' },
+//     { k: 'rspOfferPriceMin', label: 'RSP Offer Price Min', type: 'text', placeholder: 'Min offer price' },
+//     { k: 'rspOfferPriceMax', label: 'RSP Offer Price Max', type: 'text', placeholder: 'Max offer price' },
+//     { k: 'wspMin', label: 'WSP Min', type: 'text', placeholder: 'Min WSP' },
+//     { k: 'wspMax', label: 'WSP Max', type: 'text', placeholder: 'Max WSP' },
+//     { k: 'ecomMin', label: 'E COM Min', type: 'text', placeholder: 'Min E COM' },
+//     { k: 'ecomMax', label: 'E COM Max', type: 'text', placeholder: 'Max E COM' },
+
+//     { k: 'startDate', label: 'From Date', type: 'date' },
+//     { k: 'endDate', label: 'To Date', type: 'date' },
+//   ],
+
+//   /* HOW THE FILTERS SIT ON SCREEN. A string names a filter above; a
+//      { label, range } entry draws one label over a Start / End pair of the
+//      two Min/Max keys it names. The colours are the mock's: blue, green,
+//      orange. */
+//   filterGroups: [
+//     {
+//       title: 'Basic Filters',
+//       icon: 'barcode',
+//       color: '#2563a9',
+//       cols: 5,
+//       fields: ['barcodeNo', 'groupName', 'itemId', 'hsn', 'gst'],
+//     },
+//     {
+//       title: 'Supplier & Inventory',
+//       icon: 'truck',
+//       color: '#16a34a',
+//       cols: 5,
+//       fields: ['city', 'supplierId', 'agentId', 'uom'],
+//     },
+//     {
+//       title: 'Price Filters',
+//       icon: 'calculator',
+//       color: '#f59e0b',
+//       cols: 3,
+//       fields: [
+//         { label: 'RSP', range: ['rspMin', 'rspMax'] },
+//         { label: 'RSP Offer Price', range: ['rspOfferPriceMin', 'rspOfferPriceMax'] },
+//         { label: 'WSP', range: ['wspMin', 'wspMax'] },
+//         { label: 'E Com', range: ['ecomMin', 'ecomMax'] },
+//         { label: 'Age (Days)', range: ['ageMin', 'ageMax'] },
+//         { label: 'Cost Price', range: ['costPriceMin', 'costPriceMax'] },
+//         'discount',
+//       ],
+//     },
+//   ],
+
+
+
+
+
+
   filters: [
     /* A chip per barcode - type one, press Enter, type the next. A picker
        is no use here: there is one barcode per PIECE of stock, so the list
@@ -137,7 +253,7 @@ export const REPORT = {
          route rather than the Barcode Item list. */
       suggest: '/api/reports/barcode-suggest',
     },
-    { k: 'groupName', label: 'Group Name', type: 'text', placeholder: 'Group name' },
+    { k: 'groupName', label: 'Group Name', type: 'ref', ref: 'product/group', all: 'Select Group', showAllOptions: true },
     /* Picked from the Item master, several at a time. The route resolves
        each id back to the item's code AND name, because stock rows carry
        whichever of the two the import that created them wrote - the same
@@ -240,9 +356,9 @@ export const REPORT = {
     columns: [
       { k: 'locationName', t: 'Location Name' },
       { k: 'groupName', t: 'Group Name' },
-      { k: 'itemName', t: 'Item Name' },
+      { k: 'itemName', t: 'Item Name', modal: 'item' },
       { k: 'supplierCode', t: 'Supplier Code' },
-      { k: 'supplierName', t: 'Supplier Name' },
+      { k: 'supplierName', t: 'Supplier Name', modal: 'supplier' },
       { k: 'date', t: 'Date', f: 'date' },
       { k: 'age', t: 'Age' },
       /* Opens that one barcode's own report - what it is, what it cost,

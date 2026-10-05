@@ -61,7 +61,7 @@ export async function uploadBarcodeImage(file) {
 
 /* A barcode image, or why there is none - never a broken-image icon: a
    picture that fails to load says so in the same fixed box. */
-export function BarcodeImageThumb({ src, alt = 'Barcode image', height = 160, emptyText = 'No barcode image available.', label = '' }) {
+export function BarcodeImageThumb({ src, alt = 'Barcode image', height = 160, emptyText = 'No barcode image available.', label = '', onClick = null }) {
   const [failed, setFailed] = useState(false);
   useEffect(() => { setFailed(false); }, [src]);
   const shown = Boolean(src) && !failed;
@@ -70,7 +70,16 @@ export function BarcodeImageThumb({ src, alt = 'Barcode image', height = 160, em
       {label ? <div className="mb-1 text-[11px] font-semibold uppercase tracking-wide text-inkmuted">{label}</div> : null}
       <div className="flex items-center justify-center overflow-hidden rounded border border-line bg-white px-2 text-center text-[12px] text-inkmuted" style={{ height }}>
         {shown
-          ? <img src={src} alt={alt} onError={() => setFailed(true)} className="max-h-full max-w-full object-contain" />
+          ? (
+            <img
+              src={src}
+              alt={alt}
+              onError={() => setFailed(true)}
+              className="max-h-full max-w-full object-contain cursor-pointer"
+              onClick={onClick}
+              title="Click to enlarge"
+            />
+          )
           : <span>{src ? 'The barcode image could not be loaded.' : emptyText}</span>}
       </div>
     </div>

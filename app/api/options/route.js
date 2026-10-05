@@ -1292,7 +1292,7 @@ const REFS = {
   customer:                  { load: () => import('@/models/Contact'), kind: 'Customer', label: 'businessName', nameFallback: ['firstName', 'lastName'], codeField: 'contactId' },
  
   'product/filter':          { load: () => import('@/models/ProductFilter') },
-  'product/group':           { load: () => import('@/models/ProductGroup') },
+  'product/group':           { load: () => import('@/models/ProductGroup'), includeAll: true },
   uom:                       { load: () => import('@/models/Uom') },
   'attribute-addon':         { load: () => import('@/models/AttributeAddon'), where: { name: { $nin: ['SUPPLIER DESCRIPTION', 'Supplier Description', 'supplier description'] } } },
   item:                      { load: () => import('@/models/Item') },
@@ -1427,7 +1427,9 @@ export async function GET(req) {
     ? { [entry.defaultField]: -1, [label]: 1 }
     : { [label]: 1 };
  
-  const rows = await Model.find(filter).sort(sort).limit(200).lean();
+  const rowsQuery = Model.find(filter).sort(sort);
+  if (!entry.includeAll) rowsQuery.limit(200);
+  const rows = await rowsQuery.lean();
 
   /* label, or the fallback name fields, or "(untitled)" - see nameFallback */
   const textOf = (r) => {

@@ -1713,6 +1713,15 @@ const initialVisible = (spec) => {
 
 const isNumeric = (col) => col.f === 'amount' || col.f === 'count' || col.num;
 
+function paginationItems(totalPages, currentPage) {
+  if (totalPages <= 7) return Array.from({ length: totalPages }, (_, i) => i + 1);
+  if (currentPage <= 3) return [1, 2, 3, 'right-ellipsis', totalPages];
+  if (currentPage >= totalPages - 2) {
+    return [1, 'left-ellipsis', totalPages - 2, totalPages - 1, totalPages];
+  }
+  return [1, 'left-ellipsis', currentPage - 1, currentPage, currentPage + 1, 'right-ellipsis', totalPages];
+}
+
 /* Written as literal class strings: Tailwind scans source text, so a class
    built at runtime (`xl:grid-cols-${n}`) would never be generated. */
 const TILE_COLS = {
@@ -1747,6 +1756,7 @@ function RefFilter({ f, value, onChange, depValue }) {
       disabled={waiting}
       value={f.multi ? (value || []) : (value || '')}
       placeholder={waiting ? (f.waitPlaceholder || 'Select...') : (f.all || 'Select...')}
+      maxOptions={f.showAllOptions ? Infinity : undefined}
       onChange={onChange}
     />
   );
@@ -2026,7 +2036,362 @@ function HoverImage({ src, alt }) {
 /* One result table. `columns[].total` marks a column the totals row sums; the
    server sends its own totals so the figure covers the whole result set
    rather than just the visible page. */
-function Section({ section, data, tone }) {
+function SupplierDetailsModal({ row, business, onClose }) {
+  const [data, setData] = useState(null);
+  const [page, setPage] = useState(1);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState('');
+
+  useEffect(() => {
+    function closeOnEscape(event) {
+      if (event.key === 'Escape') onClose();
+    }
+    document.addEventListener('keydown', closeOnEscape);
+    return () => document.removeEventListener('keydown', closeOnEscape);
+  }, [onClose]);
+
+  useEffect(() => {
+    let cancelled = false;
+    setLoading(true);
+    setError('');
+    const params = new URLSearchParams({
+      business: business || '',
+      supplierId: row.supplierId || '',
+      supplierCode: row.supplierCode || '',
+      page: String(page),
+      perPage: '15',
+    });
+    fetch('/api/reports/master-stock-report/supplier-details?' + params, { cache: 'no-store' })
+      .then(async (response) => {
+        const result = await response.json();
+        if (!response.ok) throw new Error(result.error || 'Could not load supplier details.');
+        if (!cancelled) setData(result);
+      })
+      .catch((fetchError) => {
+        if (!cancelled) setError(fetchError.message || 'Could not load supplier details.');
+      })
+      .finally(() => { if (!cancelled) setLoading(false); });
+    return () => { cancelled = true; };
+  }, [business, row.supplierId, row.supplierCode, page]);
+
+  const supplier = data?.supplier || {};
+  const transactions = data?.transactions || [];
+  const detail = (label, value) => (
+    <div className="min-w-0 border-b border-line px-3 py-2">
+      <div className="text-[9px] uppercase text-[#71809a]">{label}</div>
+      <div className="mt-1 break-words text-[11px] font-semibold text-[#33445f]">{value || '-'}</div>
+    </div>
+  );
+  const docDate = (value) => value ? new Date(value).toLocaleDateString('en-GB') : '-';
+
+  return (
+    <div
+      className="fixed inset-0 z-[80] flex items-center justify-center bg-black/50 p-3"
+      role="presentation"
+      onMouseDown={(event) => { if (event.target === event.currentTarget) onClose(); }}
+    >
+      <section
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="supplier-details-title"
+        className="w-full max-w-[1140px] overflow-hidden rounded-md border-t-[3px] border-brand bg-white shadow-2xl"
+      >
+        <div className="flex items-start justify-between gap-4 border-b border-line px-4 py-3">
+          <div>
+            <div className="text-[9px] font-bold uppercase text-brand">Supplier Details</div>
+            <h2 id="supplier-details-title" className="mt-1 text-[17px] font-bold text-ink">
+              {supplier.legalName || row.supplierName || 'Supplier'}
+            </h2>
+            <div className="mt-1 text-[10px] uppercase text-[#71809a]">
+              Supplier No. <b className="text-[#33445f]">{supplier.supplierNo || row.supplierCode || '-'}</b>
+            </div>
+          </div>
+          <button type="button" className="btn shrink-0" onClick={onClose}>
+            <Icon name="x" size={13} /> Close
+          </button>
+        </div>
+        <div className="space-y-2.5 bg-[#f4f7fb] p-3">
+          <div className="overflow-hidden rounded border border-line bg-white">
+            <h3 className="border-b border-line px-3 py-2 text-[10px] font-bold uppercase text-[#33445f]">
+              Supplier Information
+            </h3>
+            {loading ? (
+              <div className="p-4 text-center"><span className="spin" /></div>
+            ) : error ? (
+              <div className="p-3"><div className="flash flash-err" role="alert">{error}</div></div>
+            ) : (
+              <div className="grid grid-cols-1 sm:grid-cols-3">
+                {detail('Legal Name', supplier.legalName)}
+                {detail('Contact Person', supplier.contactPerson)}
+                {detail('GST Status', supplier.gstStatus)}
+                {detail('Mobile', supplier.mobile)}
+              </div>
+            )}
+          </div>
+          {!loading && !error && (
+            <>
+              <div className="overflow-x-auto rounded border border-line bg-white">
+                <table className="dt">
+                  <thead>
+                    <tr>{['Location', 'GRC No.', 'GRC Date', 'Stock Point'].map((label) => <th key={label}>{label}</th>)}</tr>
+                  </thead>
+                  <tbody>
+                    {!transactions.length ? (
+                      <tr><td colSpan={4} className="dt-empty">No receipt records found for this supplier.</td></tr>
+                    ) : transactions.map((transaction, index) => (
+                      <tr key={`${transaction.docNo}-${index}`}>
+                        <td>{transaction.location || '-'}</td>
+                        <td>{transaction.docNo || '-'}</td>
+                        <td>{docDate(transaction.docDate)}</td>
+                        <td>{transaction.stockPoint || '-'}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+              {data.pages > 1 && (
+                <div className="flex items-center justify-between text-[11px] text-inkmuted">
+                  <span>Page {data.page} of {data.pages} · {data.total} receipts</span>
+                  <div className="flex gap-2">
+                    <button type="button" className="btn" disabled={page <= 1} onClick={() => setPage((current) => current - 1)}>Previous</button>
+                    <button type="button" className="btn" disabled={page >= data.pages} onClick={() => setPage((current) => current + 1)}>Next</button>
+                  </div>
+                </div>
+              )}
+            </>
+          )}
+        </div>
+      </section>
+    </div>
+  );
+}
+
+function ItemDetailsModal({ row, business, onClose }) {
+  const [data, setData] = useState(null);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState('');
+
+  useEffect(() => {
+    function closeOnEscape(event) {
+      if (event.key === 'Escape') onClose();
+    }
+    document.addEventListener('keydown', closeOnEscape);
+    return () => document.removeEventListener('keydown', closeOnEscape);
+  }, [onClose]);
+
+  useEffect(() => {
+    let cancelled = false;
+    setLoading(true);
+    setError('');
+    const params = new URLSearchParams({
+      business: business || '',
+      itemId: row.itemId || '',
+      itemCode: row.itemCode || '',
+      itemName: row.itemName || '',
+    });
+    fetch('/api/reports/master-stock-report/item-details?' + params, { cache: 'no-store' })
+      .then(async (response) => {
+        const result = await response.json();
+        if (!response.ok) throw new Error(result.error || 'Could not load item details.');
+        if (!cancelled) setData(result);
+      })
+      .catch((fetchError) => {
+        if (!cancelled) setError(fetchError.message || 'Could not load item details.');
+      })
+      .finally(() => { if (!cancelled) setLoading(false); });
+    return () => { cancelled = true; };
+  }, [business, row.itemId, row.itemCode, row.itemName]);
+
+  const item = data?.item || {};
+  const detail = (label, value) => (
+    <div className="min-w-0 border-b border-line px-3 py-2">
+      <div className="text-[9px] uppercase text-[#71809a]">{label}</div>
+      <div className="mt-1 break-words text-[11px] font-semibold text-[#33445f]">{value || '-'}</div>
+    </div>
+  );
+  const date = (value) => value ? new Date(value).toLocaleDateString('en-GB') : '-';
+  const headings = ['Location', 'GRC No.', 'GRC Date', 'Stock Point', 'Delivery No.', 'Delivery Date', 'LR No.', 'Transporter'];
+
+  return (
+    <div
+      className="fixed inset-0 z-[80] flex items-center justify-center bg-black/50 p-3"
+      role="presentation"
+      onMouseDown={(event) => { if (event.target === event.currentTarget) onClose(); }}
+    >
+      <section
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="item-details-title"
+        className="w-full max-w-[1140px] overflow-hidden rounded-md border-t-[3px] border-brand bg-white shadow-2xl"
+      >
+        <div className="flex items-start justify-between gap-4 border-b border-line px-4 py-3">
+          <div>
+            <div className="text-[9px] font-bold uppercase text-brand">Item Details</div>
+            <h2 id="item-details-title" className="mt-1 text-[17px] font-bold text-ink">
+              {row.itemName || 'Item'}
+            </h2>
+          </div>
+          <button type="button" className="btn shrink-0" onClick={onClose}>
+            <Icon name="x" size={13} /> Close
+          </button>
+        </div>
+        <div className="space-y-2.5 bg-[#f4f7fb] p-3">
+          <div className="overflow-hidden rounded border border-line bg-white">
+            <h3 className="border-b border-line px-3 py-2 text-[10px] font-bold uppercase text-[#33445f]">
+              Item Information
+            </h3>
+            {loading ? (
+              <div className="p-4 text-center"><span className="spin" /></div>
+            ) : error ? (
+              <div className="p-3"><div className="flash flash-err" role="alert">{error}</div></div>
+            ) : (
+              <div className="grid grid-cols-1 sm:grid-cols-3">
+                {detail('Item Name', item.name)}
+                {detail('Group', item.group)}
+                {detail('UOM', item.uom)}
+                {detail('HSN Code', item.hsnCode)}
+                {detail('HSN Description', item.hsnDescription)}
+                {detail('Item Type', item.itemType)}
+                {detail('Unique Barcode', item.uniqueBarcode)}
+              </div>
+            )}
+          </div>
+          {!loading && !error && (
+            <div className="overflow-x-auto rounded border border-line bg-white">
+              <table className="dt">
+                <thead>
+                  <tr>{headings.map((heading) => <th key={heading}>{heading}</th>)}</tr>
+                </thead>
+                <tbody>
+                  {!data?.receipts?.length ? (
+                    <tr><td colSpan={headings.length} className="dt-empty">No delivery challan details found for this item.</td></tr>
+                  ) : data.receipts.map((receipt, index) => (
+                    <tr key={`${receipt.grcNo}-${receipt.deliveryNo}-${index}`}>
+                      <td>{receipt.location || '-'}</td>
+                      <td>{receipt.grcNo || '-'}</td>
+                      <td>{date(receipt.grcDate)}</td>
+                      <td>{receipt.stockPoint || '-'}</td>
+                      <td>{receipt.deliveryNo || '-'}</td>
+                      <td>{date(receipt.deliveryDate)}</td>
+                      <td>{receipt.lrNo || '-'}</td>
+                      <td>{receipt.transporter || '-'}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </div>
+      </section>
+    </div>
+  );
+}
+
+// function Section({ section, data, tone, onSupplierSelect, onItemSelect }) {
+//   const columns = section.columns || [];
+//   const rows = data?.rows || [];
+//   const totals = data?.totals || {};
+
+//   return (
+//     <div className="card">
+//       {section.title && (
+//         <div
+//           className={
+//             'card-head '
+//             + (tone === 'green' ? 'bg-okgreen text-white' : '')
+//           }
+//         >
+//           <span className="card-title">
+//             {tone === 'green' && <Icon name="chart" size={15} />}
+//             {section.title}
+//           </span>
+//           {data?.count !== undefined && tone !== 'green' && (
+//             <span className="pill pill-blue">{data.count} records</span>
+//           )}
+//         </div>
+//       )}
+//       <div className="card-body">
+//         <div className="overflow-x-auto">
+//           <table className="dt">
+//             <thead>
+//               <tr>
+//                 {columns.map((c) => (
+//                   <th key={c.t} className={isNumeric(c) ? 'text-right' : ''}>{c.t}</th>
+//                 ))}
+//               </tr>
+//             </thead>
+//             <tbody>
+//               {rows.length === 0 && (
+//                 <tr>
+//                   <td colSpan={columns.length} className="dt-empty">No data found</td>
+//                 </tr>
+//               )}
+//               {rows.map((row, i) => (
+//                 <tr key={row._id || i}>
+//                   {columns.map((c) => (
+//                     <td key={c.t} className={isNumeric(c) ? 'text-right' : ''}>
+//                       {c.f === 'image'
+//                         ? <HoverImage src={row[c.k]} />
+//                         : c.modal === 'supplier'
+//                           ? (cellOf(row, c) && row.supplierId
+//                             ? <button
+//                                 type="button"
+//                                 className="text-brand underline hover:opacity-80"
+//                                 onClick={() => onSupplierSelect(row)}
+//                               >
+//                                 {cellOf(row, c)}
+//                               </button>
+//                             : cellOf(row, c))
+//                         : c.modal === 'item'
+//                           ? (cellOf(row, c)
+//                             ? <button
+//                                 type="button"
+//                                 className="text-brand underline hover:opacity-80"
+//                                 onClick={() => onItemSelect(row)}
+//                               >
+//                                 {cellOf(row, c)}
+//                               </button>
+//                             : '')
+//                         : c.linkStyle
+//                           ? <span className="text-brand underline">{cellOf(row, c)}</span>
+//                         : c.link
+//                           /* a column that names a destination renders as a
+//                              link - used by Master Stock Report to open one
+//                              barcode's own report. Blank cells stay plain, so
+//                              a row with nothing to point at has nothing to
+//                              click. */
+//                           ? (cellOf(row, c) && c.link(row)
+//                             ? <a className="text-brand underline hover:opacity-80" href={c.link(row)}>{cellOf(row, c)}</a>
+//                             : cellOf(row, c))
+//                           : cellOf(row, c)}
+//                     </td>
+//                   ))}
+//                 </tr>
+//               ))}
+//             </tbody>
+//             {section.totalsRow && (
+//               <tfoot>
+//                 <tr className="font-bold">
+//                   {columns.map((c, i) => (
+//                     <td key={c.t} className={isNumeric(c) ? 'text-right' : ''}>
+//                       {i === 0 ? 'Total' : (c.total ? fmt('amount', totals[c.k] ?? 0) : '')}
+//                     </td>
+//                   ))}
+//                 </tr>
+//               </tfoot>
+//             )}
+//           </table>
+//         </div>
+//       </div>
+//     </div>
+//   );
+// }
+
+
+
+
+
+function Section({ section, data, tone, onSupplierSelect, onItemSelect }) {
   const columns = section.columns || [];
   const rows = data?.rows || [];
   const totals = data?.totals || {};
@@ -2071,15 +2436,37 @@ function Section({ section, data, tone }) {
                     <td key={c.t} className={isNumeric(c) ? 'text-right' : ''}>
                       {c.f === 'image'
                         ? <HoverImage src={row[c.k]} />
+                        : c.modal === 'supplier'
+                          ? (cellOf(row, c) && row.supplierId
+                            ? <button
+                                type="button"
+                                className="text-brand underline hover:opacity-80"
+                                onClick={() => onSupplierSelect(row)}
+                              >
+                                {cellOf(row, c)}
+                              </button>
+                            : cellOf(row, c))
+                        : c.modal === 'item'
+                          ? (cellOf(row, c)
+                            ? <button
+                                type="button"
+                                className="text-brand underline hover:opacity-80"
+                                onClick={() => onItemSelect(row)}
+                              >
+                                {cellOf(row, c)}
+                              </button>
+                            : '')
+                        : c.linkStyle
+                          ? <span className="text-brand underline">{cellOf(row, c)}</span>
                         : c.link
                           /* a column that names a destination renders as a
                              link - used by Master Stock Report to open one
                              barcode's own report. Blank cells stay plain, so
                              a row with nothing to point at has nothing to
                              click. */
-                          ? (cellOf(row, c)
+                          ? (cellOf(row, c) && c.link(row)
                             ? <a className="text-brand underline hover:opacity-80" href={c.link(row)}>{cellOf(row, c)}</a>
-                            : '')
+                            : cellOf(row, c))
                           : cellOf(row, c)}
                     </td>
                   ))}
@@ -2103,6 +2490,9 @@ function Section({ section, data, tone }) {
     </div>
   );
 }
+
+/* The standalone totals table some reports print under their groups, so the
+   figure covers every group rather than the one table above 
 
 /* The standalone totals table some reports print under their groups, so the
    figure covers every group rather than the one table above it. */
@@ -2143,11 +2533,6 @@ function GrandTotal({ columns, totals }) {
    holding labelled inputs. A field entry is a filter KEY, or
    { label, range: [minKey, maxKey] }, which renders one label over a
    Start / End pair so eleven Min/Max keys read as the six ranges they are. */
-const GROUP_COLS = {
-  3: 'md:grid-cols-2 xl:grid-cols-3',
-  4: 'md:grid-cols-2 xl:grid-cols-4',
-  5: 'md:grid-cols-3 xl:grid-cols-5',
-};
 const GROUP_LABEL = 'mb-1 block text-[11.5px] font-semibold uppercase tracking-wide text-[#5d6b83]';
 
 function FilterGroups({ spec, draft, set, business }) {
@@ -2162,7 +2547,7 @@ function FilterGroups({ spec, draft, set, business }) {
           {[[fromK, 'From Date'], [toK, 'To Date']].filter(([k]) => k).map(([k, lab]) => (
             <label key={k} className="flex items-center gap-2 text-[11.5px] font-semibold uppercase tracking-wide text-[#5d6b83]">
               {lab}
-              <input type="date" className="f-input !w-[170px]" value={draft[k] || ''} onChange={(e) => set(k, e.target.value)} />
+              <input type="date" className="f-input !w-[150px]" value={draft[k] || ''} onChange={(e) => set(k, e.target.value)} />
             </label>
           ))}
         </div>
@@ -2191,13 +2576,23 @@ function FilterGroups({ spec, draft, set, business }) {
               </button>
             </div>
             {!shut && (
-              <div className={'grid grid-cols-1 gap-x-5 gap-y-3 px-4 pb-4 pt-3 ' + (GROUP_COLS[g.cols] || GROUP_COLS[4])}>
+              <div className="flex flex-wrap items-start gap-x-4 gap-y-3 px-4 pb-4 pt-3">
                 {(g.fields || []).map((entry) => {
                   if (typeof entry === 'string' || !entry.range) {
                     const f = byKey.get(typeof entry === 'string' ? entry : entry.k);
                     if (!f) return null;
                     return (
-                      <div key={f.k}>
+                      <div
+                        key={f.k}
+                        className={
+                          'w-full '
+                          + (f.k === 'discount'
+                            ? 'max-w-[110px]'
+                            : g.title === 'Basic Filters'
+                              ? 'max-w-[145px]'
+                              : 'max-w-[180px]')
+                        }
+                      >
                         <label className={GROUP_LABEL}>{f.label}{(f.req || f.oneOf) && <span className="f-req">*</span>}</label>
                         <Filter f={f} value={draft[f.k]} onChange={(v) => set(f.k, v)} business={business} depValue={f.dependsOn ? draft[f.dependsOn] : undefined} />
                       </div>
@@ -2205,11 +2600,11 @@ function FilterGroups({ spec, draft, set, business }) {
                   }
                   const [lo, hi] = entry.range;
                   return (
-                    <div key={lo}>
+                    <div key={lo} className="w-full max-w-[180px]">
                       <label className={GROUP_LABEL}>{entry.label}</label>
                       <div className="flex gap-2">
-                        <input type="text" className="f-input" placeholder="Start" value={draft[lo] || ''} onChange={(e) => set(lo, e.target.value)} />
-                        <input type="text" className="f-input" placeholder="End" value={draft[hi] || ''} onChange={(e) => set(hi, e.target.value)} />
+                        <input type="text" className="f-input min-w-0 flex-1" placeholder="Start" value={draft[lo] || ''} onChange={(e) => set(lo, e.target.value)} />
+                        <input type="text" className="f-input min-w-0 flex-1" placeholder="End" value={draft[hi] || ''} onChange={(e) => set(hi, e.target.value)} />
                       </div>
                     </div>
                   );
@@ -2265,6 +2660,8 @@ export default function ReportView({ spec, toolbar = null }) {
   /* the export being prepared ('csv' / 'xls' / 'print') - an exportAll
      report fetches its whole result first */
   const [exporting, setExporting] = useState('');
+  const [selectedSupplierRow, setSelectedSupplierRow] = useState(null);
+  const [selectedItemRow, setSelectedItemRow] = useState(null);
 
   /* Setting a filter clears every filter that depends on it: the suppliers
      picked for one city are not a valid pick for another. */
@@ -2642,6 +3039,8 @@ export default function ReportView({ spec, toolbar = null }) {
               section={section}
               data={sectionData}
               tone={spec.dynamicSections ? 'green' : undefined}
+              onSupplierSelect={setSelectedSupplierRow}
+              onItemSelect={setSelectedItemRow}
             />
           ))}
 
@@ -2650,13 +3049,57 @@ export default function ReportView({ spec, toolbar = null }) {
           )}
 
           {!loading && spec.paginated !== false && data && (
-            <div className="flex items-center pb-4 text-[13px] text-cell">
-              <span>
-                Page <b className="text-brand-link">{data.page || 1}</b> of {data.pages || 1}
+            <div className="mb-4 flex flex-wrap items-center justify-between gap-3 bg-[#eef2f8] px-3 py-2">
+              <span className="whitespace-nowrap text-[13px] text-cell">
+                PAGE <b className="text-brand-link">{data.page || 1}</b> OF {data.pages || 1}
               </span>
-              <span className="flex-1" />
-              <span className="flex gap-2">
+              <nav
+                aria-label="Report pagination"
+                className="inline-flex items-center gap-1 rounded-lg border border-line bg-white px-2 py-2 shadow-sm"
+              >
                 <button
+                  type="button"
+                  aria-label="Previous page"
+                  className="flex h-8 w-8 items-center justify-center rounded-md text-inkmuted hover:bg-[#f5f8fd] disabled:cursor-not-allowed disabled:opacity-40"
+                  disabled={(data.page || 1) <= 1}
+                  onClick={() => setPage((p) => p - 1)}
+                >
+                  <Icon name="chevL" size={16} />
+                </button>
+                {paginationItems(Number(data.pages) || 1, Number(data.page) || 1).map((item, index) => (
+                  typeof item === 'number' ? (
+                    <button
+                      key={item}
+                      type="button"
+                      aria-label={'Page ' + item}
+                      aria-current={item === (Number(data.page) || 1) ? 'page' : undefined}
+                      className={
+                        'h-8 min-w-8 rounded-md px-2 text-sm font-semibold '
+                        + (item === (Number(data.page) || 1)
+                          ? 'bg-[#368cf5] text-white'
+                          : 'text-inkmuted hover:bg-[#f5f8fd]')
+                      }
+                      onClick={() => setPage(item)}
+                    >
+                      {item}
+                    </button>
+                  ) : (
+                    <span key={item + index} className="px-1 text-inkmuted" aria-hidden="true">…</span>
+                  )
+                ))}
+                <button
+                  type="button"
+                  aria-label="Next page"
+                  className="flex h-8 w-8 items-center justify-center rounded-md text-inkmuted hover:bg-[#f5f8fd] disabled:cursor-not-allowed disabled:opacity-40"
+                  disabled={(data.page || 1) >= (data.pages || 1)}
+                  onClick={() => setPage((p) => p + 1)}
+                >
+                  <Icon name="chevR" size={16} />
+                </button>
+              </nav>
+              <div className="flex gap-2">
+                <button
+                  type="button"
                   className="btn"
                   disabled={(data.page || 1) <= 1}
                   onClick={() => setPage((p) => p - 1)}
@@ -2664,16 +3107,31 @@ export default function ReportView({ spec, toolbar = null }) {
                   Previous
                 </button>
                 <button
+                  type="button"
                   className="btn"
                   disabled={(data.page || 1) >= (data.pages || 1)}
                   onClick={() => setPage((p) => p + 1)}
                 >
                   Next
                 </button>
-              </span>
+              </div>
             </div>
           )}
         </>
+      )}
+      {selectedSupplierRow && (
+        <SupplierDetailsModal
+          row={selectedSupplierRow}
+          business={business}
+          onClose={() => setSelectedSupplierRow(null)}
+        />
+      )}
+      {selectedItemRow && (
+        <ItemDetailsModal
+          row={selectedItemRow}
+          business={business}
+          onClose={() => setSelectedItemRow(null)}
+        />
       )}
     </>
   );

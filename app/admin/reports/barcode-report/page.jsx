@@ -195,6 +195,7 @@ function BarcodeReportScreens() {
     return (
       <BarcodeDetailView
         barcodeNo={barcodeNo}
+        onSearch={(value) => router.push('/admin/reports/barcode-report?barcodeNo=' + encodeURIComponent(value))}
         /* back to the list form of this same report, not into browser history
            - the operator may have arrived here straight from a link */
         onBack={() => router.push('/admin/reports/barcode-report')}

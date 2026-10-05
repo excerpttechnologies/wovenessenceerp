@@ -352,9 +352,9 @@
 
 
 
-import { isValidObjectId } from 'mongoose';
+import { isValidObjectId, Types } from 'mongoose';
 import dbConnect from '@/lib/db';
-import { BarcodeLabel } from '@/lib/barcodeLabel';
+import { BarcodeLabel, BARCODE_STATUS } from '@/lib/barcodeLabel';
 import StockMovement from '@/models/StockMovement';
 import Item from '@/models/Item';
 import ProductGroup from '@/models/ProductGroup';
@@ -363,8 +363,10 @@ import Tax from '@/models/Tax';
 import CompanyLocation from '@/models/CompanyLocation';
 import { Supplier } from '@/lib/contacts';
 import { requireSession } from '@/lib/session';
-import { barcodeFilter, unitFor, imageUrl } from '@/lib/inventory';
+import { barcodeFilter, unitFor, imageUrl, withTransaction, MOVEMENT_TYPES } from '@/lib/inventory';
 import { barcodeImageSrc } from '@/lib/barcodeImageService';
+import { handler } from '@/lib/apiError';
+import { requirePermission, PERMISSIONS } from '@/lib/rbac';
 
 /* /api/reports/barcode-detail?barcodeNo=<no>&business=<id>
 
@@ -378,6 +380,111 @@ import { barcodeImageSrc } from '@/lib/barcodeImageService';
 
 const json = (d, s = 200) => Response.json(d, { status: s });
 const str = (v) => String(v ?? '').trim();
+
+export const PATCH = handler(async (req) => {
+  const body = await req.json();
+  const unitId = str(body.unitId);
+  if (!isValidObjectId(unitId)) return json({ error: 'A valid barcode is required.' }, 422);
+  if (body.quantity === undefined || body.quantity === null || String(body.quantity).trim() === '') {
+    return json({ error: 'Quantity is required.' }, 422);
+  }
+  if (body.rsp === undefined || body.rsp === null || String(body.rsp).trim() === '') {
+    return json({ error: 'RSP is required.' }, 422);
+  }
+
+  const quantity = Number(body.quantity);
+  const rsp = Number(body.rsp);
+  if (!Number.isFinite(quantity) || quantity < 0) {
+    return json({ error: 'Quantity must be a valid non-negative number.' }, 422);
+  }
+  if (!Number.isFinite(rsp) || rsp < 0) {
+    return json({ error: 'RSP must be a valid non-negative number.' }, 422);
+  }
+
+  await dbConnect();
+  const session = await requireSession();
+  if (!session) return json({ error: 'Unauthorized' }, 401);
+
+  const initial = await BarcodeLabel.findById(unitId)
+    .select('status businessId currentLocationId locationId')
+    .lean();
+  if (!initial) return json({ error: 'That barcode no longer exists.' }, 404);
+  if (body.business && String(initial.businessId || '') !== String(body.business)) {
+    return json({ error: 'That barcode belongs to another business.' }, 403);
+  }
+  await requirePermission(PERMISSIONS.BARCODE_GENERATE, {
+    locationId: String(initial.currentLocationId || initial.locationId || '') || undefined,
+  });
+
+  if (initial.status !== BARCODE_STATUS.IN_STOCK) {
+    return json({ error: 'Only barcodes currently in stock can be edited.' }, 409);
+  }
+
+  const result = await withTransaction(async (dbSession) => {
+    let query = BarcodeLabel.findById(unitId)
+      .select('status businessId currentBusinessId currentLocationId locationId finYear itemId itemCode itemName uom batchType barcodeNo barcodeGenerated qty qtyNum retailPrice');
+    if (dbSession) query = query.session(dbSession);
+    const unit = await query.lean();
+    if (!unit) return { error: json({ error: 'That barcode no longer exists.' }, 404) };
+    if (unit.status !== BARCODE_STATUS.IN_STOCK) {
+      return { error: json({ error: 'Only barcodes currently in stock can be edited.' }, 409) };
+    }
+
+    const oldQuantity = Number(unit.qtyNum ?? unit.qty ?? 0);
+    const delta = quantity - oldQuantity;
+    const currentRsp = String(unit.retailPrice ?? '');
+    const guard = {
+      _id: unit._id,
+      status: BARCODE_STATUS.IN_STOCK,
+      qtyNum: unit.qtyNum ?? null,
+      retailPrice: currentRsp,
+    };
+    const options = dbSession ? { session: dbSession } : {};
+    const update = await BarcodeLabel.updateOne(guard, {
+      $set: { qty: String(quantity), qtyNum: quantity, retailPrice: String(rsp) },
+    }, options);
+    if (!update.matchedCount) {
+      return { error: json({ error: 'This barcode changed while you were editing. Reload it and try again.' }, 409) };
+    }
+
+    if (delta !== 0) {
+      const locationId = unit.currentLocationId || unit.locationId || null;
+      const businessId = unit.currentBusinessId || unit.businessId || '';
+      const userId = isValidObjectId(String(session.id || '')) ? new Types.ObjectId(String(session.id)) : null;
+      const movement = {
+        businessId: isValidObjectId(String(businessId)) ? new Types.ObjectId(String(businessId)) : null,
+        finYear: unit.finYear || '',
+        type: delta > 0 ? MOVEMENT_TYPES.ADJUST_IN : MOVEMENT_TYPES.ADJUST_OUT,
+        barcodeId: unit._id,
+        barcodeNo: unit.barcodeNo || unit.barcodeGenerated || '',
+        itemId: unit.itemId || null,
+        itemCode: unit.itemCode || '',
+        itemName: unit.itemName || '',
+        uom: unit.uom || '',
+        batchType: unit.batchType || '',
+        qty: delta,
+        fromLocationId: delta < 0 ? locationId : null,
+        toLocationId: delta > 0 ? locationId : null,
+        statusBefore: unit.status,
+        statusAfter: unit.status,
+        refModel: 'barcodeDetailEdit',
+        refNo: unit.barcodeNo || unit.barcodeGenerated || '',
+        reason: 'Barcode quantity edited',
+        notes: `Quantity changed from ${oldQuantity} to ${quantity}.`,
+        userId,
+        userName: session.name || '',
+        userEmail: session.email || '',
+        at: new Date(),
+      };
+      await StockMovement.create([movement], options);
+    }
+
+    return { quantity, rsp };
+  });
+
+  if (result.error) return result.error;
+  return json({ ok: true, ...result });
+});
 
 export async function GET(req) {
   const session = await requireSession();
@@ -469,7 +576,7 @@ export async function GET(req) {
       docDate: m.createdAt || null,
       docNo: m.refNo || '',
       message: m.type || '',
-      stockPoint: m.stockPoint || m.reason || '',
+      stockPoint: m.stockPoint || '',
       receipts: qty > 0 ? qty : null,
       issues: qty < 0 ? Math.abs(qty) : null,
       balanceQty: balance,
@@ -510,7 +617,7 @@ export async function GET(req) {
       gst: unit.gst ?? '',
       uom: str(unit.uom),
       status: str(unit.status),
-      quantity: Number(unit.qty || 0),
+      quantity: Number(unit.qtyNum ?? unit.qty ?? 0),
       /* kept for any older reader: the barcode's image, else the item's */
       imageUrl: barcodeImageUrl || itemImageUrl,
 
