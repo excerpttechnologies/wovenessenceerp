@@ -3081,7 +3081,7 @@ import Icon from './Icon';
 import { useScope } from './ScopeContext';
 import { useOptions } from './useOptions';
 import ErpSelectorModal from './ErpSelectorModal';
-import { readImport, editRecord, EDIT_FIELDS, FIELD_LABELS, REQUIRED } from '@/lib/barcodeReportImport';
+import { readImport, editRecord, EDIT_FIELDS, FIELD_LABELS, REQUIRED, movementTotals } from '@/lib/barcodeReportImport';
 import { imagePlan } from '@/lib/barcodeImage';
 import { BarcodeImageInput, BarcodeImageThumb, uploadBarcodeImage } from './BarcodeImagePicker';
 import {
@@ -3314,6 +3314,8 @@ export default function BarcodeReportImport({ api }) {
   /* corrections typed in the preview: line -> { field: value } - checked
      against this ERP again before anything is imported */
   const [edits, setEdits] = useState(new Map());
+  /* stock movement edits: line -> movementIndex -> { field: value } */
+  const [movementEdits, setMovementEdits] = useState(new Map());
   /* an image import: the operator's word that they compared the values with
      the image - OCR can be sure of a wrong character */
   const [compared, setCompared] = useState(false);
@@ -3373,7 +3375,7 @@ export default function BarcodeReportImport({ api }) {
     setOpen(true); setPickingErp(false); setStep('input'); setMode('paste'); setAsking(''); setPaste(''); setTextOrigin('text');
     setFile(null); setFileName(''); setError(''); setFailure(null);
     setRead(null); setReview(null); setResult(null); setTicked(new Set()); setPicks(new Map()); setDecided(new Map());
-    setOpen2(new Set()); setConfirming(false); setEdits(new Map()); setCompared(false);
+    setOpen2(new Set()); setConfirming(false); setEdits(new Map()); setMovementEdits(new Map()); setCompared(false);
     setLocation(scopeLocation || '');
     dropImages(); setStage(''); clearBarcodeImages();
     setQtyDecrease(0); setQtyIncrease(0); setShowValidationModal(false); setMissingFields([]);
@@ -3522,6 +3524,7 @@ export default function BarcodeReportImport({ api }) {
     setPicks(new Map(d.rows.filter((r) => r.status === 'changed').map((r) => [r.key, defaultPicks(r)])));
     setDecided(new Map());
     setEdits(new Map());
+    setMovementEdits(new Map());
     const rows = d.rows.filter((r) => r.status in STATUS);
     setOpen2(new Set(rows.length <= 3 ? rows.map((r) => r.key) : []));
     setConfirming(false);
@@ -3628,7 +3631,27 @@ export default function BarcodeReportImport({ api }) {
   /* the corrections checked against this ERP again */
   function recheck() {
     if (!read) return;
-    const records = read.records.map((r) => editRecord(r, edits.get(r.line)));
+    const records = read.records.map((r) => {
+      const withEdits = editRecord(r, edits.get(r.line));
+      const movEdits = movementEdits.get(r.line);
+      if (!movEdits || !withEdits?.details?.movements) return withEdits;
+      const movements = withEdits.details.movements.map((m, i) => {
+        const overrides = movEdits[i];
+        if (!overrides) return m;
+        const merged = { ...m };
+        Object.entries(overrides).forEach(([field, val]) => { merged[field] = val; });
+        /* recalculate balance and netAmount using existing formula */
+        merged.receipts = Math.abs(Number(merged.receipts) || 0);
+        merged.issues = Math.abs(Number(merged.issues) || 0);
+        merged.balance = Math.round((merged.receipts - merged.issues) * 1000) / 1000;
+        merged.finalPrice = Number(merged.finalPrice) || 0;
+        merged.netAmount = Math.round(Math.max(merged.receipts, merged.issues) * merged.finalPrice * 100) / 100;
+        merged.signedQty = Math.round((merged.receipts - merged.issues) * 1000) / 1000;
+        return merged;
+      });
+      const totals = movementTotals(movements, withEdits.details.totals?.printed);
+      return { ...withEdits, details: { ...withEdits.details, movements, totals } };
+    });
     check({ ...read, records }, { keepCompared: true });
   }
   const setEdit = (line, key, value, original, force = false) => setEdits((map) => {
@@ -3638,6 +3661,33 @@ export default function BarcodeReportImport({ api }) {
     if (Object.keys(row).length) next.set(line, row); else next.delete(line);
     return next;
   });
+  /* set one field of one movement row for a given record line */
+  const setMovementEdit = (line, movIndex, field, value) => setMovementEdits((map) => {
+    const next = new Map(map);
+    const lineEdits = { ...(next.get(line) || {}) };
+    lineEdits[movIndex] = { ...(lineEdits[movIndex] || {}), [field]: value };
+    next.set(line, lineEdits);
+    return next;
+  });
+  /* get effective movements for a record line (originals merged with edits) */
+  const effectiveMovements = (rec) => {
+    const orig = rec?.details?.movements || [];
+    const movEdits = movementEdits.get(rec?.line);
+    if (!movEdits) return orig;
+    return orig.map((m, i) => {
+      const overrides = movEdits[i];
+      if (!overrides) return m;
+      const merged = { ...m };
+      Object.entries(overrides).forEach(([field, val]) => { merged[field] = val; });
+      merged.receipts = Math.abs(Number(merged.receipts) || 0);
+      merged.issues = Math.abs(Number(merged.issues) || 0);
+      merged.balance = Math.round((merged.receipts - merged.issues) * 1000) / 1000;
+      merged.finalPrice = Number(merged.finalPrice) || 0;
+      merged.netAmount = Math.round(Math.max(merged.receipts, merged.issues) * merged.finalPrice * 100) / 100;
+      merged.signedQty = Math.round((merged.receipts - merged.issues) * 1000) / 1000;
+      return merged;
+    });
+  };
   const dirty = [...edits.values()].some((e) => Object.keys(e).length);
   const editCount = [...edits.values()].reduce((a, e) => a + Object.keys(e).length, 0);
 
@@ -3741,14 +3791,40 @@ export default function BarcodeReportImport({ api }) {
         });
       }
       setStage(imagesPayload.length ? 'Importing...' : '');
-      /* Apply quantity adjustments to the records */
+      /* Apply quantity adjustments and movement edits to the records */
       const adjustedRecords = recordsOf(read?.records).map((rec) => {
-        if (isDetails && rec.values) {
-          const currentQty = Number(rec.values.qty) || 0;
+        let out = rec;
+        /* qty adjustments */
+        if (isDetails && out.values) {
+          const currentQty = Number(out.values.qty) || 0;
           const finalQty = Math.max(0, currentQty - qtyDecrease + qtyIncrease);
-          return { ...rec, values: { ...rec.values, qty: String(finalQty) } };
+          out = { ...out, values: { ...out.values, qty: String(finalQty) } };
         }
-        return rec;
+        /* movement edits */
+        const movEdits = movementEdits.get(rec.line);
+        if (movEdits && out.details?.movements) {
+          const movements = out.details.movements.map((m, i) => {
+            const overrides = movEdits[i];
+            if (!overrides) return m;
+            const merged = { ...m };
+            Object.entries(overrides).forEach(([field, val]) => { merged[field] = val; });
+            merged.receipts = Math.abs(Number(merged.receipts) || 0);
+            merged.issues = Math.abs(Number(merged.issues) || 0);
+            merged.balance = Math.round((merged.receipts - merged.issues) * 1000) / 1000;
+            merged.finalPrice = Number(merged.finalPrice) || 0;
+            merged.netAmount = Math.round(Math.max(merged.receipts, merged.issues) * merged.finalPrice * 100) / 100;
+            merged.signedQty = Math.round((merged.receipts - merged.issues) * 1000) / 1000;
+            /* update docDate if edited as string back to Date */
+            if (merged.docDate && typeof merged.docDate === 'string' && merged.docDate !== '') {
+              const d = new Date(merged.docDate);
+              if (!Number.isNaN(d.getTime())) merged.docDate = d;
+            }
+            return merged;
+          });
+          const totals = movementTotals(movements, out.details.totals?.printed);
+          out = { ...out, details: { ...out.details, movements, totals } };
+        }
+        return out;
       });
       const d = await post({
         mode: 'import',
@@ -4099,6 +4175,9 @@ export default function BarcodeReportImport({ api }) {
                       qtyIncrease={qtyIncrease}
                       onQtyDecreaseChange={setQtyDecrease}
                       onQtyIncreaseChange={setQtyIncrease}
+                      movementEdits={movementEdits.get(r.line) || {}}
+                      effectiveMovements={effectiveMovements(rec)}
+                      onMovementEdit={(movIndex, field, value) => setMovementEdit(r.line, movIndex, field, value)}
                     />
                   );
                 })}
@@ -4528,6 +4607,7 @@ function DetailsCard({
   rec, row, edits, onEdit, busy, multi, ticked, onTick, picked, decision, onKeep, onReplace, onToggleField, readWarnings,
   barcodeImage, imagePlan: plan, onAttachImage, onRemoveImage, onDecideImage,
   qtyDecrease, qtyIncrease, onQtyDecreaseChange, onQtyIncreaseChange,
+  movementEdits: mEdits, effectiveMovements: effMovements, onMovementEdit,
 }) {
   const d = rec.details || {};
   const id = rec.identify || {};
@@ -4547,9 +4627,14 @@ function DetailsCard({
   const barcodeProblems = (row.errors || []).filter((e) => e.field === 'barcode').map((e) => e.message);
   const otherProblems = (row.errors || []).filter((e) => e.field !== 'barcode').map((e) => e.message);
   const ocrDoubt = (rec.review || []).some((r) => r.field === 'barcode' && /OCR is not sure/.test(r.message));
-  const summary = summaryOf(d);
+  /* use effective (possibly edited) movements for live totals & summary */
+  const liveMovements = effMovements || d.movements || [];
+  const liveTotals = movementTotals(liveMovements, d.totals?.printed).computed;
+  /* build a live details object for summaryOf */
+  const liveD = { ...d, movements: liveMovements, totals: { ...d.totals, computed: liveTotals } };
+  const summary = summaryOf(liveD);
   const held = row.links?.stockAt?.[0];
-  const totals = d.totals?.computed;
+  const totals = liveTotals;
   const printed = d.totals?.printed;
   const head = noBarcode ? { text: 'BARCODE REQUIRED', tone: 'bg-[#fdecec] text-danger' }
     : row.status === 'new' ? { text: 'NEW BARCODE - READY TO IMPORT', tone: 'bg-okgreenbg text-okgreen' }
@@ -4621,9 +4706,21 @@ function DetailsCard({
         <div className="grid gap-3 sm:grid-cols-3">{SUPPLIER_INFO.map(field)}</div>
       </Section>
 
-      <Section title="Stock Movements" aside={<span className="text-[11.5px] text-inkmuted">{plural((d.movements || []).length, 'row')} - kept as the barcode&apos;s history</span>}>
-        {(d.movements || []).length ? (
+      <Section title="Stock Movements" aside={<span className="text-[11.5px] text-inkmuted">{plural(liveMovements.length, 'row')} - kept as the barcode&apos;s history</span>}>
+        {liveMovements.length ? (
           <div className="overflow-x-auto">
+            <style>{`
+              .mov-cell-input {
+                width: 100%; min-width: 70px; padding: 1px 4px; font-size: 12px;
+                border: 1px solid transparent; border-radius: 3px;
+                background: transparent; outline: none;
+              }
+              .mov-cell-input:focus {
+                border-color: #6b7aff; background: #fff; box-shadow: 0 0 0 2px rgba(107,122,255,0.15);
+              }
+              .mov-cell-input.num { text-align: right; }
+              .mov-cell-input[type="datetime-local"] { min-width: 160px; font-size: 11px; }
+            `}</style>
             <table className="w-full border-collapse text-[12px]" aria-label="Stock movements">
               <thead>
                 <tr className="bg-[#f7f9fc] text-left">
@@ -4633,20 +4730,111 @@ function DetailsCard({
                 </tr>
               </thead>
               <tbody>
-                {d.movements.map((m, i) => (
-                  <tr key={m.key || i}>
-                    <td className="border border-line px-2 py-1">{m.location || '—'}</td>
-                    <td className="whitespace-nowrap border border-line px-2 py-1">{when(m.docDate)}</td>
-                    <td className="border border-line px-2 py-1">{m.docNo || '—'}</td>
-                    <td className="border border-line px-2 py-1">{m.particulars || m.party || m.docType || '—'}</td>
-                    <td className="border border-line px-2 py-1">{m.stockPoint || '—'}</td>
-                    <td className="border border-line px-2 py-1 text-right">{m.receipts || 0}</td>
-                    <td className="border border-line px-2 py-1 text-right">{m.issues || 0}</td>
-                    <td className="border border-line px-2 py-1 text-right">{m.balance ?? '—'}</td>
-                    <td className="border border-line px-2 py-1 text-right">{money(m.finalPrice)}</td>
-                    <td className="border border-line px-2 py-1 text-right">{money(m.netAmount)}</td>
-                  </tr>
-                ))}
+                {liveMovements.map((m, i) => {
+                  /* docDate: for the datetime-local input we need YYYY-MM-DDTHH:MM format */
+                  const rawDate = m.docDate ? new Date(m.docDate) : null;
+                  const dtLocalVal = rawDate && !Number.isNaN(rawDate.getTime())
+                    ? rawDate.toLocaleString('sv-SE', { timeZone: 'Asia/Kolkata' }).replace(' ', 'T').slice(0, 16)
+                    : '';
+                  const overrides = mEdits?.[i] || {};
+                  const dtInputVal = overrides.docDate !== undefined ? overrides.docDate : dtLocalVal;
+                  return (
+                    <tr key={m.key || i}>
+                      <td className="border border-line px-1 py-0.5">
+                        <input
+                          className="mov-cell-input"
+                          type="text"
+                          defaultValue={m.location || ''}
+                          onBlur={(e) => onMovementEdit(i, 'location', e.target.value)}
+                          aria-label={`Row ${i + 1} Location`}
+                          disabled={busy}
+                        />
+                      </td>
+                      <td className="border border-line px-1 py-0.5 whitespace-nowrap">
+                        <input
+                          className="mov-cell-input"
+                          type="datetime-local"
+                          value={dtInputVal}
+                          onChange={(e) => onMovementEdit(i, 'docDate', e.target.value)}
+                          aria-label={`Row ${i + 1} Doc Date`}
+                          disabled={busy}
+                        />
+                      </td>
+                      <td className="border border-line px-1 py-0.5">
+                        <input
+                          className="mov-cell-input"
+                          type="text"
+                          defaultValue={m.docNo || ''}
+                          onBlur={(e) => onMovementEdit(i, 'docNo', e.target.value)}
+                          aria-label={`Row ${i + 1} Doc No`}
+                          disabled={busy}
+                        />
+                      </td>
+                      <td className="border border-line px-1 py-0.5">
+                        <input
+                          className="mov-cell-input"
+                          type="text"
+                          defaultValue={m.particulars || m.party || m.docType || ''}
+                          onBlur={(e) => onMovementEdit(i, 'particulars', e.target.value)}
+                          aria-label={`Row ${i + 1} Message`}
+                          disabled={busy}
+                        />
+                      </td>
+                      <td className="border border-line px-1 py-0.5">
+                        <input
+                          className="mov-cell-input"
+                          type="text"
+                          defaultValue={m.stockPoint || ''}
+                          onBlur={(e) => onMovementEdit(i, 'stockPoint', e.target.value)}
+                          aria-label={`Row ${i + 1} Stock Point`}
+                          disabled={busy}
+                        />
+                      </td>
+                      <td className="border border-line px-1 py-0.5">
+                        <input
+                          className="mov-cell-input num"
+                          type="number"
+                          min="0"
+                          step="1"
+                          value={m.receipts ?? 0}
+                          onChange={(e) => onMovementEdit(i, 'receipts', Math.abs(Number(e.target.value) || 0))}
+                          aria-label={`Row ${i + 1} Receipts`}
+                          disabled={busy}
+                        />
+                      </td>
+                      <td className="border border-line px-1 py-0.5">
+                        <input
+                          className="mov-cell-input num"
+                          type="number"
+                          min="0"
+                          step="1"
+                          value={m.issues ?? 0}
+                          onChange={(e) => onMovementEdit(i, 'issues', Math.abs(Number(e.target.value) || 0))}
+                          aria-label={`Row ${i + 1} Issues`}
+                          disabled={busy}
+                        />
+                      </td>
+                      <td className="border border-line px-1 py-0.5 text-right text-inkmuted" aria-label={`Row ${i + 1} Balance Qty`}>
+                        {m.balance ?? '—'}
+                      </td>
+                      <td className="border border-line px-1 py-0.5">
+                        <input
+                          className="mov-cell-input num"
+                          type="number"
+                          min="0"
+                          step="0.01"
+                          value={m.finalPrice ?? 0}
+                          onChange={(e) => onMovementEdit(i, 'finalPrice', Number(e.target.value) || 0)}
+                          aria-label={`Row ${i + 1} Final Price`}
+                          disabled={busy}
+                        />
+                      </td>
+                      <td className="border border-line px-1 py-0.5 text-right text-inkmuted" aria-label={`Row ${i + 1} Net Amt`}>
+                        {money(m.netAmount)}
+                      </td>
+                    </tr>
+                  );
+                })}
                 {totals ? (
                   <tr className="bg-[#f7f9fc] font-semibold">
                     <td className="border border-line px-2 py-1" colSpan={5}>TOTAL</td>
@@ -4661,11 +4849,6 @@ function DetailsCard({
             </table>
           </div>
         ) : <div className="text-[12.5px] text-inkmuted">No movement rows were read.</div>}
-        {d.totals?.mismatches?.length > 0 && (
-          <div className="mt-1 text-[12.5px] text-[#8a5a00]">
-            The rows add up to {d.totals.mismatches.map((k) => `${k} ${totals?.[k]}`).join(', ')}, but the page&apos;s TOTAL says {d.totals.mismatches.map((k) => `${k} ${printed?.[k]}`).join(', ')}.
-          </div>
-        )}
       </Section>
 
       <Section title="Stock Summary">

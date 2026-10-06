@@ -258,7 +258,18 @@ export const REPORT = {
        each id back to the item's code AND name, because stock rows carry
        whichever of the two the import that created them wrote - the same
        reason the Group Name filter matches on both. */
-    { k: 'itemId', label: 'Item Name', type: 'ref', ref: 'item', multi: true, all: 'Type to search' },
+    // { k: 'itemId', label: 'Item Name', type: 'ref', ref: 'item', multi: true, all: 'Type to search' },
+     {
+      k: 'itemId',
+      label: 'Item Name',
+      type: 'ref',
+      ref: 'item',
+      multi: true,
+      dependsOn: 'groupName',
+      dependsParam: 'groupId',
+      waitPlaceholder: 'Select group first',
+      all: 'Type to search',
+    },
     { k: 'hsn', label: 'HSN', type: 'text', placeholder: 'HSN code' },
     /* GST % is typed, not picked from the Tax master. That master
        (models/Tax.js, the ref: 'tax' option list) keys on its own _id and
@@ -277,7 +288,7 @@ export const REPORT = {
        city on the Supplier master, via /api/options&city=). The city alone
        already filters the stock; picking suppliers narrows it further, and
        several suppliers can be picked at once. */
-    { k: 'city', label: 'City', type: 'city', placeholder: 'Type city', suggest: '/api/reports/supplier-cities' },
+    { k: 'city', label: 'City', type: 'city', placeholder: 'Type city', suggest: '/api/cities' },
     {
       k: 'supplierId',
       label: 'Supplier Name',
@@ -289,9 +300,22 @@ export const REPORT = {
       waitPlaceholder: 'Enter city first',
       all: 'Type to search',
     },
+
     /* the agent on the Supplier master - the stock of every vendor that
        agent covers; several at a time */
-    { k: 'agentId', label: 'Agent', type: 'ref', ref: 'agent', multi: true, all: 'Type to search' },
+    // { k: 'agentId', label: 'Agent', type: 'ref', ref: 'agent', multi: true, all: 'Type to search' },
+    {
+      k: 'agentId',
+      label: 'Agent',
+      type: 'ref',
+      ref: 'agent',
+      multi: true,
+      dependsOn: 'city',
+      dependsParam: 'city',
+      waitPlaceholder: 'Enter city first',
+      all: 'Type to search',
+    },
+
     { k: 'uom', label: 'UOM', type: 'ref', ref: 'uom', all: 'All UOM' },
 
     { k: 'ageMin', label: 'Age Min (days)', type: 'text', placeholder: 'Min age' },
@@ -354,10 +378,10 @@ export const REPORT = {
     title: 'Stock',
     totalsRow: true,
     columns: [
-      { k: 'locationName', t: 'Location Name' },
+      // { k: 'locationName', t: 'Location Name' },
       { k: 'groupName', t: 'Group Name' },
       { k: 'itemName', t: 'Item Name', modal: 'item' },
-      { k: 'supplierCode', t: 'Supplier Code' },
+      { k: 'supplierCode', t: 'Supplier Code', linkStyle: true },
       { k: 'supplierName', t: 'Supplier Name', modal: 'supplier' },
       { k: 'date', t: 'Date', f: 'date' },
       { k: 'age', t: 'Age' },

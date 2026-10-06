@@ -2456,8 +2456,13 @@ function Section({ section, data, tone, onSupplierSelect, onItemSelect }) {
                                 {cellOf(row, c)}
                               </button>
                             : '')
-                        : c.linkStyle
-                          ? <span className="text-brand underline">{cellOf(row, c)}</span>
+                        // : c.linkStyle
+                        //   ? <span className="text-brand underline">{cellOf(row, c)}</span>
+                        // : c.link
+
+
+                         : c.linkStyle
+                          ? <button type="button" className="text-brand underline">{cellOf(row, c)}</button>
                         : c.link
                           /* a column that names a destination renders as a
                              link - used by Master Stock Report to open one
