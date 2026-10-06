@@ -532,9 +532,36 @@ const money = (v) => (v === null || v === undefined || v === '' ? '-' : Number(v
 const text = (v) => (v === null || v === undefined || String(v).trim() === '' ? '-' : String(v));
 const when = (v) => (v ? new Date(v).toLocaleString('en-GB') : '-');
 
+/* Calculate age in days from a date to today. Returns formatted string like
+   "0 DAYS", "1 DAY", "365 DAYS", or "-" if the date is invalid. Normalizes
+   dates to start of day to avoid timezone/hour issues affecting the count. */
+function calculateAgeInDays(dateValue) {
+  if (!dateValue) return '-';
+  try {
+    const grcDate = new Date(dateValue);
+    if (isNaN(grcDate.getTime())) return '-';
+    
+    // Normalize both dates to start of day (midnight) to compare calendar dates only
+    const startOfGrcDay = new Date(grcDate.getFullYear(), grcDate.getMonth(), grcDate.getDate());
+    const today = new Date();
+    const startOfToday = new Date(today.getFullYear(), today.getMonth(), today.getDate());
+    
+    // Calculate difference in milliseconds and convert to days
+    const diffMs = startOfToday - startOfGrcDay;
+    const diffDays = Math.floor(diffMs / (1000 * 60 * 60 * 24));
+    
+    // Handle negative days (future dates) - show as 0
+    const days = Math.max(0, diffDays);
+    
+    return days === 1 ? '1 DAY' : `${days} DAYS`;
+  } catch (err) {
+    return '-';
+  }
+}
+
 /* One labelled value. The label sits above its value so a long branch name
    does not push the column out of shape. */
-function Cell({ label, value, wide = false, editing = false, type = 'text', onChange }) {
+function Cell({ label, value, wide = false, editing = false, type = 'text', onChange, bold = false }) {
   return (
     <div className={'px-4 py-3 ' + (wide ? 'sm:col-span-2' : '')}>
       <div className="text-[11px] uppercase tracking-wide text-inkmuted">{label}</div>
@@ -549,7 +576,7 @@ function Cell({ label, value, wide = false, editing = false, type = 'text', onCh
           onChange={(event) => onChange(event.target.value)}
         />
       ) : (
-        <div className="mt-0.5 text-[13.5px] text-ink">{value}</div>
+        <div className={'mt-0.5 text-[13.5px] text-ink' + (bold ? ' font-semibold' : '')}>{value}</div>
       )}
     </div>
   );
@@ -775,8 +802,9 @@ export default function BarcodeDetailView({ barcodeNo, onBack, onSearch }) {
                 <Cell label="Tax Region" value={text(d.taxRegion)} />
                 <Cell label="Current Location" value={text(d.currentLocation)} />
                 <Cell label="Origin Location" value={text(d.originLocation)} />
-                <Cell label="GRC Number" value={text(d.grcNo)} />
-                <Cell label="GRC Date" value={when(d.grcDate)} />
+                <Cell label="GRC Number" value={text(d.grcNo)} bold />
+                <Cell label="GRC Date" value={when(d.grcDate)} bold />
+                <Cell label="Age" value={calculateAgeInDays(d.grcDate)} bold />
                 <Cell label="Serial Number" value={text(d.serialNo)} />
                 <Cell label="Batch Number" value={text(d.batchNo)} />
                 <Cell label="Transfer Number" value={text(d.transferNo)} />
